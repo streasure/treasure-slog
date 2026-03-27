@@ -1,0 +1,42 @@
+# 生产环境配置
+log:
+  level: info
+  format: json
+  async:
+    enabled: true
+    buffer_size: 100000
+    batch_size: 1000
+    flush_interval: 10
+    workers: 16
+  console:
+    enabled: false
+  file:
+    enabled: true
+    path: /var/log/app/app.log
+    rotate:
+      max_size: 500
+      max_backups: 30
+      max_age: 90
+      compress: true
+  network:
+    enabled: false
+    type: tcp
+    address: localhost:9200
+    timeout: 5
+    retry: 3
+    tls: false
+  stacktrace:
+    enabled: true
+    level: error
+    depth: 10
+  sampling:
+    enabled: true
+    initial: 10000
+    thereafter: 1000
+  field_cache:
+    enabled: true
+    size: 10000
+  performance:
+    lock_free: true
+    use_pool: true
+    prealloc: true

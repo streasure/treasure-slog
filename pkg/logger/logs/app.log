@@ -21,3 +21,42 @@
 {"time":"2026-03-27T22:14:56+08:00","level":"INFO","msg":"Info message with default level","key":"value"}
 {"time":"2026-03-27T22:14:56+08:00","level":"INFO","msg":"Test message","key":"value"}
 {"time":"2026-03-27T22:14:56+08:00","level":"INFO","msg":"Test message with context","context":{"Context":{"Context":{"Context":{}}}},"request_id":"test-request-id","user_id":"test-user-id","span_id":"test-span-id"}
+{"time":"2026-03-28T00:12:19+08:00","level":"DEBUG","msg":"Debug message","key1":"value1","key2":42}
+{"time":"2026-03-28T00:12:19+08:00","level":"INFO","msg":"Info message","key1":"value1","key2":42}
+{"time":"2026-03-28T00:12:19+08:00","level":"WARN","msg":"Warn message","key1":"value1","key2":42}
+{"time":"2026-03-28T00:12:19+08:00","level":"ERROR","msg":"Error message","key1":"value1","key2":42}
+{"time":"2026-03-28T00:12:19+08:00","level":"INFO","msg":"Test message with hook","key":"value"}
+{"time":"2026-03-28T00:12:19+08:00","level":"INFO","msg":"Test message with context","context":{"Context":{"Context":{"Context":{}}}},"request_id":"test-request-id","user_id":"test-user-id","span_id":"test-span-id"}
+{"time":"2026-03-28T00:12:19+08:00","level":"INFO","msg":"Info message with default level","key":"value"}
+{"time":"2026-03-28T00:12:19+08:00","level":"INFO","msg":"Test message","key":"value"}
+{"time":"2026-03-28T00:12:19+08:00","level":"INFO","msg":"Test message with context","context":{"Context":{"Context":{"Context":{}}}},"request_id":"test-request-id","user_id":"test-user-id","span_id":"test-span-id"}
+{"time":"2026-04-26T00:34:26+08:00","level":"DEBUG","msg":"Debug message","key1":"value1","key2":42}
+{"time":"2026-04-26T00:34:26+08:00","level":"INFO","msg":"Info message","key1":"value1","key2":42}
+{"time":"2026-04-26T00:34:26+08:00","level":"INFO","msg":"Test message with hook","key":"value"}
+{"time":"2026-04-26T00:34:26+08:00","level":"WARN","msg":"Warn message","key1":"value1","key2":42}
+{"time":"2026-04-26T00:34:26+08:00","level":"INFO","msg":"Test message with context","context":{"Context":{"Context":{"Context":{}}}},"request_id":"test-request-id","user_id":"test-user-id","span_id":"test-span-id"}
+{"time":"2026-04-26T00:34:26+08:00","level":"ERROR","msg":"Error message","key1":"value1","key2":42}
+{"time":"2026-04-26T00:34:26+08:00","level":"INFO","msg":"Info message with default level","key":"value"}
+{"time":"2026-04-26T00:34:26+08:00","level":"INFO","msg":"Test message","key":"value"}
+{"time":"2026-04-26T00:34:26+08:00","level":"INFO","msg":"Test message with context","context":{"Context":{"Context":{"Context":{}}}},"request_id":"test-request-id","user_id":"test-user-id","span_id":"test-span-id"}
+{"time":"2026-03-27T19:52:33.8995297+08:00","level":"DEBUG","msg":"Debug message","key1":"value1","key2":42}
+{"time":"2026-03-27T19:52:33.9005286+08:00","level":"INFO","msg":"Info message","key1":"value1","key2":42}
+{"time":"2026-03-27T19:52:33.9005286+08:00","level":"WARN","msg":"Warn message","key1":"value1","key2":42}
+{"time":"2026-03-27T19:52:33.9005286+08:00","level":"ERROR","msg":"Error message","key1":"value1","key2":42,"stacktrace":"goroutine 18644 [running]:\ntreasure-slog/pkg/logger.getStackTrace(0x70?)\n\tE:/treasure-slog/pkg/logger/logger.go:950 +0x49\ntreasure-slog/pkg/logger.(*SLogger).processEntry(0xc000106300, 0xc0028fa3f0)\n\tE:/treasure-slog/pkg/logger/logger.go:792 +0x176\ntreasure-slog/pkg/logger.(*SLogger).log(0xc000106300, 0x8, {0x56c29c, 0xd}, {0xc00c1ca5c0?, 0x503c40?, 0x1?})\n\tE:/treasure-slog/pkg/logger/logger.go:750 +0x4fb\ntreasure-slog/pkg/logger.(*SLogger).Error(0x57236d?, {0x56c29c?, 0xc000d66000?}, {0xc00c1ca5c0?, 0x120?, 0x7bccc0?})\n\tE:/treasure-slog/pkg/logger/logger.go:816 +0x31\ntreasure-slog/pkg/logger.TestAllFeatures(0xc0000e21a0)\n\tE:/treasure-slog/pkg/logger/integration_test.go:58 +0x49b\ntesting.tRunner(0xc0000e21a0, 0x59e098)\n\tC:/Program Files/Go/src/testing/testing.go:1689 +0xfb\ncreated by testing.(*T).Run in goroutine 1\n\tC:/Program Files/Go/src/testing/testing.go:1742 +0x390\n"}
+{"time":"2026-03-27T19:52:33.9005286+08:00","level":"INFO","msg":"Test message with hook","key":"value"}
+{"time":"2026-03-27T19:52:33.9005286+08:00","level":"INFO","msg":"Test message with context","context":{"Context":{"Context":{"Context":{}}}},"request_id":"test-request-id","user_id":"test-user-id","span_id":"test-span-id"}
+{"time":"2026-03-27T21:40:01.5213932+08:00","level":"DEBUG","msg":"Debug message","key1":"value1","key2":42}
+{"time":"2026-03-27T21:40:01.5379075+08:00","level":"INFO","msg":"Info message","key1":"value1","key2":42}
+{"time":"2026-03-27T21:40:01.5379075+08:00","level":"WARN","msg":"Warn message","key1":"value1","key2":42}
+{"time":"2026-03-27T21:40:01.5379075+08:00","level":"ERROR","msg":"Error message","key1":"value1","key2":42,"stacktrace":"goroutine 15074 [running]:\ntreasure-slog/pkg/logger.getStackTrace(0x70?)\n\tE:/treasure-slog/pkg/logger/logger.go:1164 +0x49\ntreasure-slog/pkg/logger.(*SLogger).processEntry(0xc02d222240, 0xc011cc0380)\n\tE:/treasure-slog/pkg/logger/logger.go:963 +0x176\ntreasure-slog/pkg/logger.(*SLogger).log(0xc02d222240, 0x8, {0x44b297, 0xd}, {0xc030770500, 0x4, 0x1?})\n\tE:/treasure-slog/pkg/logger/logger.go:933 +0x476\ntreasure-slog/pkg/logger.(*SLogger).Error(0x451368?, {0x44b297?, 0xc02d20a000?}, {0xc030770500?, 0x120?, 0x69acc0?})\n\tE:/treasure-slog/pkg/logger/logger.go:999 +0x31\ntreasure-slog/pkg/logger.TestAllFeatures(0xc02d200000)\n\tE:/treasure-slog/pkg/logger/integration_test.go:58 +0x49b\ntesting.tRunner(0xc02d200000, 0x47d098)\n\tC:/Program Files/Go/src/testing/testing.go:1689 +0xfb\ncreated by testing.(*T).Run in goroutine 1\n\tC:/Program Files/Go/src/testing/testing.go:1742 +0x390\n"}
+{"time":"2026-03-27T21:40:01.5379075+08:00","level":"INFO","msg":"Test message with hook","key":"value"}
+{"time":"2026-03-27T21:40:01.5379075+08:00","level":"INFO","msg":"Test message with context","context":{"Context":{"Context":{"Context":{}}}},"request_id":"test-request-id","user_id":"test-user-id","span_id":"test-span-id"}
+{"time":"2026-03-27T22:22:17.1530531+08:00","level":"DEBUG","msg":"Debug message","key1":"value1","key2":42}
+{"time":"2026-03-27T22:22:17.1540456+08:00","level":"INFO","msg":"Info message","key1":"value1","key2":42}
+{"time":"2026-03-27T22:22:17.1540456+08:00","level":"WARN","msg":"Warn message","key1":"value1","key2":42}
+{"time":"2026-03-27T22:22:17.1540456+08:00","level":"ERROR","msg":"Error message","key1":"value1","key2":42,"stacktrace":"goroutine 14123 [running]:\ntreasure-slog/pkg/logger.getStackTrace(0x70?)\n\tE:/treasure-slog/pkg/logger/logger.go:1164 +0x49\ntreasure-slog/pkg/logger.(*SLogger).processEntry(0xc02082e240, 0xc011cabab0)\n\tE:/treasure-slog/pkg/logger/logger.go:963 +0x176\ntreasure-slog/pkg/logger.(*SLogger).log(0xc02082e240, 0x8, {0xdfb297, 0xd}, {0xc001514540, 0x4, 0x1?})\n\tE:/treasure-slog/pkg/logger/logger.go:933 +0x476\ntreasure-slog/pkg/logger.(*SLogger).Error(0xe01368?, {0xdfb297?, 0xc02081e000?}, {0xc001514540?, 0x120?, 0x104acc0?})\n\tE:/treasure-slog/pkg/logger/logger.go:999 +0x31\ntreasure-slog/pkg/logger.TestAllFeatures(0xc020814000)\n\tE:/treasure-slog/pkg/logger/integration_test.go:58 +0x49b\ntesting.tRunner(0xc020814000, 0xe2d098)\n\tC:/Program Files/Go/src/testing/testing.go:1689 +0xfb\ncreated by testing.(*T).Run in goroutine 1\n\tC:/Program Files/Go/src/testing/testing.go:1742 +0x390\n"}
+{"time":"2026-03-27T22:22:17.1540456+08:00","level":"INFO","msg":"Test message with hook","key":"value"}
+{"time":"2026-03-27T22:22:17.1540456+08:00","level":"INFO","msg":"Test message with context","context":{"Context":{"Context":{"Context":{}}}},"request_id":"test-request-id","user_id":"test-user-id","span_id":"test-span-id"}
+{"time":"2026-03-27T22:22:17.1609534+08:00","level":"INFO","msg":"Test message","key":"value"}
+{"time":"2026-03-27T22:22:17.1609534+08:00","level":"INFO","msg":"Test message with context","context":{"Context":{"Context":{"Context":{}}}},"request_id":"test-request-id","user_id":"test-user-id","span_id":"test-span-id"}
+{"time":"2026-03-27T22:22:17.2787758+08:00","level":"INFO","msg":"Info message with default level","key":"value"}

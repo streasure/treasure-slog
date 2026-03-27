@@ -1,0 +1,28 @@
+# 开发环境配置
+log:
+  level: debug
+  format: console
+  async:
+    enabled: true
+    buffer_size: 1000
+    batch_size: 10
+    flush_interval: 100
+    workers: 2
+  console:
+    enabled: true
+    format: text
+  file:
+    enabled: false
+  stacktrace:
+    enabled: true
+    level: error
+    depth: 10
+  sampling:
+    enabled: false
+  field_cache:
+    enabled: true
+    size: 100
+  performance:
+    lock_free: true
+    use_pool: true
+    prealloc: false

@@ -4,6 +4,24 @@ log:
   level: info
   # 日志格式: json, console
   format: json
+  # 异步配置
+  async:
+    # 是否启用异步日志
+    enabled: true
+    # 缓冲区大小
+    buffer_size: 10000
+    # 批量写入大小
+    batch_size: 100
+    # 批量写入间隔(毫秒)
+    flush_interval: 100
+    # 工作线程数
+    workers: 4
+  # 控制台输出配置
+  console:
+    # 是否启用控制台输出
+    enabled: true
+    # 输出格式: json, text
+    format: text
   # 文件输出配置
   file:
     # 是否启用文件输出
@@ -13,22 +31,54 @@ log:
     # 轮转配置
     rotate:
       # 最大文件大小 (MB)
-      max_size: 10
+      max_size: 100
       # 最大保留文件数
-      max_backups: 5
+      max_backups: 10
       # 最大保留时间 (天)
-      max_age: 7
+      max_age: 30
+      # 是否压缩
+      compress: true
+  # 网络输出配置
+  network:
+    # 是否启用网络输出
+    enabled: false
+    # 输出类型: tcp, udp, http
+    type: tcp
+    # 目标地址
+    address: localhost:9200
+    # 连接超时(秒)
+    timeout: 5
+    # 重试次数
+    retry: 3
+    # 是否启用TLS
+    tls: false
   # 堆栈追踪配置
   stacktrace:
     # 是否启用堆栈追踪
     enabled: true
     # 堆栈追踪级别: error, warn
     level: error
+    # 堆栈深度
+    depth: 10
   # 日志采样配置
   sampling:
     # 是否启用采样
     enabled: true
-    # 采样率
-    initial: 100
+    # 初始采样数
+    initial: 1000
     # 之后的采样率
-    thereafter: 10
+    thereafter: 100
+  # 字段缓存配置
+  field_cache:
+    # 是否启用字段缓存
+    enabled: true
+    # 缓存大小
+    size: 1000
+  # 性能优化配置
+  performance:
+    # 是否启用无锁队列
+    lock_free: true
+    # 是否启用对象池
+    use_pool: true
+    # 是否启用内存预分配
+    prealloc: true

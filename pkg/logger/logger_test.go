@@ -131,6 +131,12 @@ func TestHookFunction(t *testing.T) {
 	// 记录日志，触发 Hook
 	loggerWithHook.Info("Test message", "key", "value")
 
+	// 等待异步日志处理完成
+	err = loggerWithHook.Sync()
+	if err != nil {
+		t.Fatalf("Failed to sync logger: %v", err)
+	}
+
 	// 验证 Hook 被调用
 	if !hookCalled {
 		t.Fatalf("Hook was not called")

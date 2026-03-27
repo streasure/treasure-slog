@@ -1,0 +1,5 @@
+# 日志文件
+*.log
+*.log.*
+logs/
+pkg/logger/logs/*

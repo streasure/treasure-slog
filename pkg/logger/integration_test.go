@@ -76,6 +76,12 @@ func TestAllFeatures(t *testing.T) {
 	loggerWithHook := logger.AddHook(testHook)
 	loggerWithHook.Info("Test message with hook", "key", "value")
 
+	// 等待异步日志处理完成
+	err = loggerWithHook.Sync()
+	if err != nil {
+		t.Fatalf("Failed to sync logger: %v", err)
+	}
+
 	if !hookCalled {
 		t.Fatalf("Hook was not called")
 	}
