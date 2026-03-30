@@ -91,7 +91,7 @@ package main
 
 import (
     "context"
-    "treasure-slog/pkg/logger"
+    logger "treasure-slog"
 )
 
 func main() {
