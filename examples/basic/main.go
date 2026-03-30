@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"time"
 
-	"treasure-slog/pkg/logger"
+	logger "treasure-slog"
 )
 
 func main() {
-	fmt.Println("=== Treasure-Slog 基础使用示例 ===\n")
+	fmt.Println("=== Treasure-Slog 基础使用示例 ===")
 
 	// 1. 基础使用 - 全局日志单例
 	fmt.Println("1. 基础日志记录")
@@ -65,7 +65,7 @@ func main() {
 	// 6. Panic 恢复
 	fmt.Println("6. Panic 恢复示例")
 	riskyOperation()
-	fmt.Println("程序继续执行（Panic 被捕获）\n")
+	fmt.Println("程序继续执行（Panic 被捕获）")
 
 	// 等待异步日志写入完成
 	time.Sleep(100 * time.Millisecond)

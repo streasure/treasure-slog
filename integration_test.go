@@ -14,11 +14,11 @@ func TestAllFeatures(t *testing.T) {
 	}
 
 	// 临时修改配置文件，启用文件输出
-	originalConfig, err := os.ReadFile("../../configs/config.yaml")
+	originalConfig, err := os.ReadFile("configs/config.yaml")
 	if err != nil {
 		t.Fatalf("Failed to read config file: %v", err)
 	}
-	defer os.WriteFile("../../configs/config.yaml", originalConfig, 0644)
+	defer os.WriteFile("configs/config.yaml", originalConfig, 0644)
 
 	// 修改配置文件，启用文件输出
 	configContent := `log:
@@ -39,14 +39,14 @@ func TestAllFeatures(t *testing.T) {
     initial: 100
     thereafter: 10
 `
-	err = os.WriteFile("../../configs/config.yaml", []byte(configContent), 0644)
+	err = os.WriteFile("configs/config.yaml", []byte(configContent), 0644)
 	if err != nil {
 		t.Fatalf("Failed to write config file: %v", err)
 	}
 
 	// 1. 测试基本日志功能
 	t.Log("=== Testing basic logging ===")
-	logger, err := New("../../configs/config.yaml")
+	logger, err := New("configs/config.yaml")
 	if err != nil {
 		t.Fatalf("Failed to create logger: %v", err)
 	}

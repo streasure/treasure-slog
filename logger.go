@@ -511,7 +511,7 @@ func newWorker(id int, logger *SLogger) *worker {
 // 1. 启动后台 goroutine 处理日志
 // 2. 非阻塞启动，不影响主线程
 func (w *worker) start() {
-go w.run()
+	go w.run()
 }
 
 // run 工作线程主循环
@@ -768,10 +768,21 @@ func (l *SLogger) createHandler(writer io.Writer) slog.Handler {
 // 1. 全局访问点：方便在应用各处使用
 // 2. 延迟初始化：首次使用时创建
 // 3. 容错处理：配置加载失败时使用默认配置
+// 4. 支持从环境变量或命令行参数获取配置文件路径
 func GetLogger() Logger {
 	once.Do(func() {
 		var err error
-		globalLogger, err = New("configs/config.yaml")
+		var configPath string
+		
+		// 1. 首先检查环境变量
+		if envPath := os.Getenv("LOG_CONFIG_PATH"); envPath != "" {
+			configPath = envPath
+		} else {
+			// 2. 默认配置路径
+			configPath = "configs/config.yaml"
+		}
+		
+		globalLogger, err = New(configPath)
 		if err != nil {
 			// 如果配置文件加载失败，使用默认配置
 			defaultConfig := &config.Config{

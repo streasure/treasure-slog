@@ -21,11 +21,11 @@ func TestLogger(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// 临时修改配置文件
-			originalConfig, err := os.ReadFile("../../configs/config.yaml")
+			originalConfig, err := os.ReadFile("configs/config.yaml")
 			if err != nil {
 				t.Fatalf("Failed to read config file: %v", err)
 			}
-			defer os.WriteFile("../../configs/config.yaml", originalConfig, 0644)
+			defer os.WriteFile("configs/config.yaml", originalConfig, 0644)
 
 			// 修改配置文件中的日志级别
 			configContent := `log:
@@ -39,12 +39,12 @@ func TestLogger(t *testing.T) {
   sampling:
     enabled: false
 `
-			err = os.WriteFile("../../configs/config.yaml", []byte(configContent), 0644)
+			err = os.WriteFile("configs/config.yaml", []byte(configContent), 0644)
 			if err != nil {
 				t.Fatalf("Failed to write config file: %v", err)
 			}
 
-			logger, err := New("../../configs/config.yaml")
+			logger, err := New("configs/config.yaml")
 			if err != nil {
 				t.Fatalf("Failed to create logger: %v", err)
 			}
@@ -81,7 +81,7 @@ func TestLogger(t *testing.T) {
 
 func TestLoggerWithDefaultLevel(t *testing.T) {
 	// 测试默认日志级别
-	logger, err := New("../../configs/config.yaml")
+	logger, err := New("configs/config.yaml")
 	if err != nil {
 		t.Fatalf("Failed to create logger: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestPanicRecovery(t *testing.T) {
 
 func TestHookFunction(t *testing.T) {
 	// 测试 Hook 功能
-	logger, err := New("../../configs/config.yaml")
+	logger, err := New("configs/config.yaml")
 	if err != nil {
 		t.Fatalf("Failed to create logger: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestHookFunction(t *testing.T) {
 
 func TestContextAutoInject(t *testing.T) {
 	// 测试 Context 自动注入功能
-	logger, err := New("../../configs/config.yaml")
+	logger, err := New("configs/config.yaml")
 	if err != nil {
 		t.Fatalf("Failed to create logger: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestContextAutoInject(t *testing.T) {
 
 func TestSync(t *testing.T) {
 	// 测试 Graceful Shutdown 功能
-	logger, err := New("../../configs/config.yaml")
+	logger, err := New("configs/config.yaml")
 	if err != nil {
 		t.Fatalf("Failed to create logger: %v", err)
 	}

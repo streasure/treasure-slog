@@ -7,11 +7,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"treasure-slog/pkg/logger"
+	logger "treasure-slog"
 )
 
 func main() {
-	fmt.Println("=== Treasure-Slog 高吞吐量测试示例 ===\n")
+	fmt.Println("=== Treasure-Slog 高吞吐量测试示例 ===")
 
 	// 使用高性能配置
 	log, err := logger.New("configs/config.highperf.yaml")

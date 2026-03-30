@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"treasure-slog/pkg/logger"
+	logger "treasure-slog"
 )
 
 // 全局日志实例
