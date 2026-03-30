@@ -4,7 +4,7 @@
 
 ## 特性
 
-- **高性能**：无锁环形缓冲区 + 批量写入，实测可达 150万+ 日志/秒
+- **高性能**：无锁环形缓冲区 + 批量写入，实测可达 167万+ 日志/秒
 - **多输出支持**：控制台、文件、网络（TCP/UDP/HTTP）同时输出
 - **异步处理**：不阻塞业务逻辑，自动批量处理
 - **动态配置**：支持运行时调整日志级别
@@ -14,6 +14,8 @@
 - **字段缓存**：自动缓存常用字段，提升性能
 - **Hook 机制**：支持自定义钩子函数
 - **Context 注入**：自动从 context 提取追踪信息
+- **灵活配置**：支持通过命令行参数和环境变量指定配置文件
+- **大日志支持**：针对大日志场景（每条 >1MB）进行了专门优化
 
 ## 安装
 
@@ -30,7 +32,7 @@ go get github.com/yourusername/treasure-slog
 package main
 
 import (
-    "treasure-slog/pkg/logger"
+    logger "treasure-slog"
 )
 
 func main() {
@@ -54,7 +56,7 @@ func main() {
 package main
 
 import (
-    "treasure-slog/pkg/logger"
+    logger "treasure-slog"
 )
 
 func main() {
@@ -148,7 +150,7 @@ func main() {
 package main
 
 import (
-    "treasure-slog/pkg/logger"
+    logger "treasure-slog"
 )
 
 func main() {
@@ -173,7 +175,7 @@ func main() {
 package main
 
 import (
-    "treasure-slog/pkg/logger"
+    logger "treasure-slog"
 )
 
 func riskyOperation() {
@@ -374,7 +376,7 @@ log:
 package main
 
 import (
-    "treasure-slog/pkg/logger"
+    logger "treasure-slog"
 )
 
 func main() {
@@ -481,13 +483,13 @@ func main() {
 go test ./...
 
 # 运行基准测试
-go test -bench=. -benchtime=10s ./pkg/logger
+go test -bench=. -benchtime=10s
 
 # 运行百万级日志测试
-go test -run=TestMillionLogsPerSecond -v ./pkg/logger
+go test -run=TestMillionLogsPerSecond -v
 
 # 性能分析
-go test -bench=BenchmarkLogger -cpuprofile=cpu.prof -memprofile=mem.prof ./pkg/logger
+go test -bench=BenchmarkLogger -cpuprofile=cpu.prof -memprofile=mem.prof
 go tool pprof cpu.prof
 ```
 

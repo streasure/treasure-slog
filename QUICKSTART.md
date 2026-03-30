@@ -19,7 +19,7 @@ go mod tidy
 package main
 
 import (
-    "treasure-slog/pkg/logger"
+    logger "treasure-slog"
 )
 
 func main() {
@@ -33,7 +33,36 @@ func main() {
 }
 ```
 
-### 3. 运行示例
+### 3. 通过命令行参数指定配置文件
+
+```go
+package main
+
+import (
+    "flag"
+    "os"
+    logger "treasure-slog"
+)
+
+func main() {
+    // 解析命令行参数
+    configPath := flag.String("config", "", "配置文件路径")
+    flag.Parse()
+
+    // 设置环境变量
+    if *configPath != "" {
+        os.Setenv("LOG_CONFIG_PATH", *configPath)
+    }
+
+    // 获取日志实例
+    log := logger.GetLogger()
+    defer log.Sync()
+    
+    log.Info("应用启动", "config", *configPath)
+}
+```
+
+### 4. 运行示例
 
 ```bash
 # 基础示例
@@ -44,6 +73,9 @@ go run examples/http_server/main.go
 
 # 高吞吐量测试
 go run examples/high_throughput/main.go
+
+# 命令行参数示例
+go run cmd/main.go --config=configs/config.dev.yaml
 ```
 
 ## 常用配置
@@ -84,7 +116,7 @@ log:
     workers: 8
 ```
 
-### 高性能模式（150万+ 日志/秒）
+### 高性能模式（167万+ 日志/秒）
 
 ```yaml
 log:
@@ -100,6 +132,34 @@ log:
     buffer_size: 2000000
     batch_size: 20000
     workers: 64
+  performance:
+    lock_free: true
+    use_pool: true
+```
+
+### 大日志场景（每条 >1MB）
+
+```yaml
+log:
+  level: info
+  format: json
+  async:
+    enabled: true
+    buffer_size: 500
+    batch_size: 5
+    flush_interval: 100
+    workers: 16
+  console:
+    enabled: false
+  file:
+    enabled: true
+    path: ./logs/large.log
+    rotate:
+      max_size: 1000
+      max_backups: 3
+      compress: false
+  sampling:
+    enabled: true
   performance:
     lock_free: true
     use_pool: true
@@ -151,13 +211,13 @@ func risky() {
 
 ```bash
 # 运行基准测试
-go test -bench=. -benchtime=10s ./pkg/logger
+go test -bench=. -benchtime=10s
 
 # 百万级日志测试
-go test -run=TestMillionLogsPerSecond -v ./pkg/logger
+go test -run=TestMillionLogsPerSecond -v
 
 # 压力测试
-go test -run=TestLoggerStress -v ./pkg/logger
+go test -run=TestLoggerStress -v
 ```
 
 ## 常见问题
@@ -188,7 +248,8 @@ A: 调整配置：
 
 - 查看完整文档：[README.md](README.md)
 - 运行更多示例：`examples/` 目录
-- 阅读源码：`pkg/logger/logger.go`
+- 阅读源码：`logger.go`
+- 尝试大日志场景：`configs/config.large.yaml`
 
 ## 获取帮助
 
