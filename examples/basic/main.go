@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	logger "treasure-slog"
+	logger "github.com/streasure/treasure-slog"
 )
 
 func main() {
@@ -14,7 +14,7 @@ func main() {
 	// 1. 基础使用 - 全局日志单例
 	fmt.Println("1. 基础日志记录")
 	log := logger.GetLogger()
-	
+
 	log.Info("应用启动", "version", "1.0.0", "env", "production")
 	log.Debug("调试信息", "detail", "some debug data")
 	log.Warn("警告信息", "threshold", 80)
@@ -34,7 +34,7 @@ func main() {
 	ctx = context.WithValue(ctx, "request_id", "req-abc-123")
 	ctx = context.WithValue(ctx, "user_id", "user-456")
 	ctx = context.WithValue(ctx, "trace_id", "trace-xyz-789")
-	
+
 	ctxLog := log.WithContext(ctx)
 	ctxLog.Info("处理请求", "endpoint", "/api/users", "method", "GET")
 	fmt.Println()
@@ -42,13 +42,13 @@ func main() {
 	// 4. 动态调整日志级别
 	fmt.Println("4. 动态调整日志级别")
 	fmt.Printf("当前日志级别: %s\n", log.GetLevel())
-	
+
 	log.Debug("这条 debug 日志不会显示（当前级别 info）")
-	
+
 	log.SetLevel("debug")
 	fmt.Printf("调整后级别: %s\n", log.GetLevel())
 	log.Debug("现在这条 debug 日志会显示了")
-	
+
 	log.SetLevel("info") // 恢复
 	fmt.Println()
 
@@ -56,7 +56,7 @@ func main() {
 	fmt.Println("5. Hook 机制示例")
 	metricsHook := &MetricsHook{counter: make(map[string]int)}
 	hookedLog := log.AddHook(metricsHook)
-	
+
 	hookedLog.Info("带 Hook 的日志")
 	hookedLog.Warn("警告日志")
 	hookedLog.Error("错误日志")
@@ -69,10 +69,10 @@ func main() {
 
 	// 等待异步日志写入完成
 	time.Sleep(100 * time.Millisecond)
-	
+
 	// 同步日志（应用退出前必须调用）
 	log.Sync()
-	
+
 	fmt.Println("=== 示例结束 ===")
 }
 
@@ -88,6 +88,6 @@ func (h *MetricsHook) Run(msg string, level string, args ...any) {
 // riskyOperation 可能触发 panic 的操作
 func riskyOperation() {
 	defer logger.Recover() // 自动捕获 panic 并记录
-	
+
 	panic("模拟的 panic 错误")
 }

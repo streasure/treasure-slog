@@ -21,7 +21,7 @@
 
 ```bash
 go mod init your-project
-go get github.com/yourusername/treasure-slog
+go get github.com/streasure/treasure-slog
 ```
 
 ## 快速开始
@@ -32,7 +32,7 @@ go get github.com/yourusername/treasure-slog
 package main
 
 import (
-    logger "treasure-slog"
+    logger "github.com/streasure/treasure-slog"
 )
 
 func main() {
@@ -56,7 +56,7 @@ func main() {
 package main
 
 import (
-    logger "treasure-slog"
+    logger "github.com/streasure/treasure-slog"
 )
 
 func main() {
@@ -91,7 +91,7 @@ package main
 
 import (
     "context"
-    logger "treasure-slog"
+    logger "github.com/streasure/treasure-slog"
 )
 
 func main() {
@@ -119,7 +119,7 @@ package main
 
 import (
     "fmt"
-    "treasure-slog/pkg/logger"
+    "github.com/streasure/treasure-slog"
 )
 
 // 自定义 Hook
@@ -150,7 +150,7 @@ func main() {
 package main
 
 import (
-    logger "treasure-slog"
+    logger "github.com/streasure/treasure-slog"
 )
 
 func main() {
@@ -175,7 +175,7 @@ func main() {
 package main
 
 import (
-    logger "treasure-slog"
+    logger "github.com/streasure/treasure-slog"
 )
 
 func riskyOperation() {
@@ -376,7 +376,7 @@ log:
 package main
 
 import (
-    logger "treasure-slog"
+    logger "github.com/streasure/treasure-slog"
 )
 
 func main() {

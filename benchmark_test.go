@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"treasure-slog/internal/config"
+	"github.com/streasure/treasure-slog/internal/config"
 )
 
 // BenchmarkLogger 基础性能测试
@@ -89,9 +89,9 @@ func BenchmarkLogger(b *testing.B) {
 	// 并发测试
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			logger.Info("Benchmark info message", 
-				"key1", "value1", 
-				"key2", 42, 
+			logger.Info("Benchmark info message",
+				"key1", "value1",
+				"key2", 42,
 				"key3", 3.14,
 				"key4", true,
 			)
@@ -511,7 +511,7 @@ func TestMillionLogsPerSecond(t *testing.T) {
 	if logsPerSecond < 1000000 {
 		t.Errorf("Failed to achieve 1M logs/second. Actual: %.2f logs/second", logsPerSecond)
 	} else {
-		t.Logf("✓ Achieved target: %.2f logs/second (%.2fx target)", 
+		t.Logf("✓ Achieved target: %.2f logs/second (%.2fx target)",
 			logsPerSecond, logsPerSecond/1000000)
 	}
 
@@ -687,7 +687,7 @@ func TestLoggerComparison(t *testing.T) {
 
 	logger.Sync()
 
-	t.Logf("Our logger: %d logs in %v (%.2f logs/second)", 
+	t.Logf("Our logger: %d logs in %v (%.2f logs/second)",
 		numLogs, ourDuration, ourLogsPerSecond)
 
 	// 清理
@@ -711,7 +711,7 @@ func BenchmarkRingBuffer(b *testing.B) {
 // BenchmarkSyncMap 字段缓存性能测试
 func BenchmarkSyncMap(b *testing.B) {
 	var m sync.Map
-	
+
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0

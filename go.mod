@@ -1,4 +1,4 @@
-module treasure-slog
+module github.com/streasure/treasure-slog
 
 go 1.22.5
 

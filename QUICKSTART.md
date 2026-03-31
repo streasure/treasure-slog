@@ -6,7 +6,7 @@
 
 ```bash
 # 克隆项目
-git clone https://github.com/yourusername/treasure-slog.git
+git clone https://github.com/streasure/treasure-slog.git
 cd treasure-slog
 
 # 安装依赖
@@ -19,7 +19,7 @@ go mod tidy
 package main
 
 import (
-    logger "treasure-slog"
+    logger "github.com/streasure/treasure-slog"
 )
 
 func main() {
@@ -41,7 +41,7 @@ package main
 import (
     "flag"
     "os"
-    logger "treasure-slog"
+    logger "github.com/streasure/treasure-slog"
 )
 
 func main() {
@@ -253,5 +253,5 @@ A: 调整配置：
 
 ## 获取帮助
 
-- GitHub Issues: https://github.com/yourusername/treasure-slog/issues
-- 文档: https://github.com/yourusername/treasure-slog/wiki
+- GitHub Issues: https://github.com/streasure/treasure-slog/issues
+- 文档: https://github.com/streasure/treasure-slog/wiki

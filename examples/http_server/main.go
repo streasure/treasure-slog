@@ -6,132 +6,132 @@ import (
 	"net/http"
 	"time"
 
-	logger "treasure-slog"
+	logger "github.com/streasure/treasure-slog"
 )
 
-// 全局日志实例
-var log logger.Logger
-
 func main() {
-	// 初始化日志
-	log = logger.GetLogger()
+	fmt.Println("=== Treasure-Slog HTTP 服务器示例 ===")
+
+	// 获取日志实例
+	log := logger.GetLogger()
 	defer log.Sync()
 
-	log.Info("HTTP 服务器启动", "port", 8080)
-
-	// 设置路由
-	http.HandleFunc("/", homeHandler)
-	http.HandleFunc("/api/users", usersHandler)
-	http.HandleFunc("/api/orders", ordersHandler)
+	// 注册路由
+	http.HandleFunc("/", handleRoot)
+	http.HandleFunc("/api", handleAPI)
+	http.HandleFunc("/error", handleError)
 
 	// 启动服务器
-	server := &http.Server{
-		Addr:         ":8080",
-		Handler:      loggingMiddleware(http.DefaultServeMux),
-		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 10 * time.Second,
+	addr := ":8080"
+	fmt.Printf("服务器启动在 http://localhost%s\n", addr)
+	fmt.Println("按 Ctrl+C 停止服务器")
+
+	// 启动 HTTP 服务器
+	if err := http.ListenAndServe(addr, nil); err != nil && err != http.ErrServerClosed {
+		log.Error("服务器启动失败", "error", err)
 	}
 
-	log.Info("服务器监听", "address", "http://localhost:8080")
-	if err := server.ListenAndServe(); err != nil {
-		log.Error("服务器错误", "error", err)
-	}
+	fmt.Println("服务器已停止")
 }
 
-// loggingMiddleware 日志中间件
-func loggingMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
+// handleRoot 处理根路径请求
+func handleRoot(w http.ResponseWriter, r *http.Request) {
+	log := logger.GetLogger()
 
-		// 创建带追踪信息的 context
-		ctx := r.Context()
-		ctx = context.WithValue(ctx, "request_id", generateRequestID())
-		ctx = context.WithValue(ctx, "user_id", r.Header.Get("X-User-ID"))
-		ctx = context.WithValue(ctx, "trace_id", r.Header.Get("X-Trace-ID"))
+	// 创建带上下文的日志记录器
+	ctx := r.Context()
+	ctx = context.WithValue(ctx, "request_id", generateRequestID())
+	ctx = context.WithValue(ctx, "client_ip", r.RemoteAddr)
+	ctxLog := log.WithContext(ctx)
 
-		// 创建带 context 的 logger
-		requestLog := log.WithContext(ctx)
-		requestLog.Info("请求开始",
-			"method", r.Method,
-			"path", r.URL.Path,
-			"remote_addr", r.RemoteAddr,
-			"user_agent", r.UserAgent(),
-		)
+	// 记录请求
+	ctxLog.Info("HTTP 请求",
+		"method", r.Method,
+		"path", r.URL.Path,
+		"user_agent", r.UserAgent(),
+	)
 
-		// 包装 ResponseWriter 以获取状态码
-		wrapped := &responseWriter{ResponseWriter: w, statusCode: 200}
+	// 模拟处理时间
+	time.Sleep(10 * time.Millisecond)
 
-		// 执行下一个处理器
-		next.ServeHTTP(wrapped, r.WithContext(ctx))
+	// 返回响应
+	w.Header().Set("Content-Type", "text/plain")
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "Hello, Treasure-Slog!\n")
+	fmt.Fprintf(w, "请求 ID: %s\n", ctx.Value("request_id"))
 
-		// 记录请求完成
-		duration := time.Since(start)
-		requestLog.Info("请求完成",
-			"method", r.Method,
-			"path", r.URL.Path,
-			"status", wrapped.statusCode,
-			"duration_ms", duration.Milliseconds(),
-		)
-	})
+	// 记录响应
+	ctxLog.Info("HTTP 响应",
+		"status", http.StatusOK,
+		"method", r.Method,
+		"path", r.URL.Path,
+	)
 }
 
-// responseWriter 包装 http.ResponseWriter 以捕获状态码
-type responseWriter struct {
-	http.ResponseWriter
-	statusCode int
-}
+// handleAPI 处理 API 请求
+func handleAPI(w http.ResponseWriter, r *http.Request) {
+	log := logger.GetLogger()
 
-func (rw *responseWriter) WriteHeader(code int) {
-	rw.statusCode = code
-	rw.ResponseWriter.WriteHeader(code)
-}
+	// 创建带上下文的日志记录器
+	ctx := r.Context()
+	ctx = context.WithValue(ctx, "request_id", generateRequestID())
+	ctxLog := log.WithContext(ctx)
 
-// 处理器函数
-func homeHandler(w http.ResponseWriter, r *http.Request) {
-	log := logger.GetLogger().WithContext(r.Context())
-	
-	log.Info("首页访问")
-	
+	// 记录请求
+	ctxLog.Info("API 请求",
+		"method", r.Method,
+		"path", r.URL.Path,
+	)
+
+	// 模拟 API 处理
+	time.Sleep(50 * time.Millisecond)
+
+	// 记录处理信息
+	ctxLog.Debug("API 处理中",
+		"param1", r.URL.Query().Get("param1"),
+		"param2", r.URL.Query().Get("param2"),
+	)
+
+	// 返回 JSON 响应
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"message": "Welcome to Treasure-Slog HTTP Server"}`))
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, `{"status":"success","message":"API 调用成功","request_id":"%s"}`, ctx.Value("request_id"))
+
+	// 记录响应
+	ctxLog.Info("API 响应",
+		"status", http.StatusOK,
+	)
 }
 
-func usersHandler(w http.ResponseWriter, r *http.Request) {
-	log := logger.GetLogger().WithContext(r.Context())
-	
-	switch r.Method {
-	case http.MethodGet:
-		log.Info("获取用户列表")
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"users": [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]}`))
-		
-	case http.MethodPost:
-		log.Info("创建用户")
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		w.Write([]byte(`{"id": 3, "name": "New User"}`))
-		
-	default:
-		log.Warn("不支持的 HTTP 方法", "method", r.Method)
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-	}
-}
+// handleError 处理错误请求
+func handleError(w http.ResponseWriter, r *http.Request) {
+	log := logger.GetLogger()
 
-func ordersHandler(w http.ResponseWriter, r *http.Request) {
-	log := logger.GetLogger().WithContext(r.Context())
-	
-	// 模拟业务逻辑
-	orderID := r.URL.Query().Get("id")
-	if orderID == "" {
-		log.Error("缺少订单 ID")
-		http.Error(w, "Missing order ID", http.StatusBadRequest)
-		return
-	}
-	
-	log.Info("查询订单", "order_id", orderID)
-	
+	// 创建带上下文的日志记录器
+	ctx := r.Context()
+	ctx = context.WithValue(ctx, "request_id", generateRequestID())
+	ctxLog := log.WithContext(ctx)
+
+	// 记录请求
+	ctxLog.Info("错误请求",
+		"method", r.Method,
+		"path", r.URL.Path,
+	)
+
+	// 模拟错误
+	time.Sleep(20 * time.Millisecond)
+
+	// 记录错误
+	err := fmt.Errorf("模拟的服务器错误")
+	ctxLog.Error("处理请求时出错",
+		"error", err,
+		"path", r.URL.Path,
+	)
+
+	// 返回错误响应
 	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprintf(w, `{"order_id": "%s", "status": "completed", "amount": 99.99}`, orderID)
+	w.WriteHeader(http.StatusInternalServerError)
+	fmt.Fprintf(w, `{"status":"error","message":"服务器内部错误","request_id":"%s"}`, ctx.Value("request_id"))
 }
 
 // generateRequestID 生成请求 ID

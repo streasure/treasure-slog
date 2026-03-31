@@ -26,7 +26,7 @@ import (
 
 	"gopkg.in/natefinch/lumberjack.v2"
 
-	"treasure-slog/internal/config"
+	"github.com/streasure/treasure-slog/internal/config"
 )
 
 // Hook 定义日志钩子接口
