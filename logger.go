@@ -126,7 +126,7 @@ func (e *logEntry) Reset() {
 	e.hooks = nil
 	e.timestamp = time.Time{}
 }
-    
+
 // ringBuffer 无锁环形缓冲区
 // 设计意图：
 // 1. 实现无锁并发：使用原子操作替代互斥锁，减少线程竞争
@@ -218,12 +218,12 @@ func newBatchWriter(writer io.Writer, batchSize int, flushInterval time.Duration
 		batchSize:     batchSize,
 		flushInterval: flushInterval,
 	}
-	
+
 	// 启动定时刷新，确保日志及时写入
 	if flushInterval > 0 {
 		bw.timer = time.AfterFunc(flushInterval, bw.flush)
 	}
-	
+
 	return bw
 }
 
@@ -235,17 +235,17 @@ func newBatchWriter(writer io.Writer, batchSize int, flushInterval time.Duration
 func (bw *batchWriter) Write(p []byte) (n int, err error) {
 	bw.mu.Lock()
 	defer bw.mu.Unlock()
-	
+
 	n, err = bw.buffer.Write(p)
 	if err != nil {
 		return n, err
 	}
-	
+
 	// 如果缓冲区满了，立即刷新
 	if bw.buffer.Buffered() >= bw.batchSize*1024 {
 		err = bw.buffer.Flush()
 	}
-	
+
 	return n, err
 }
 
@@ -256,7 +256,7 @@ func (bw *batchWriter) Write(p []byte) (n int, err error) {
 func (bw *batchWriter) flush() {
 	bw.mu.Lock()
 	defer bw.mu.Unlock()
-	
+
 	if bw.buffer.Buffered() > 0 {
 		bw.buffer.Flush()
 	}
@@ -275,13 +275,13 @@ func (bw *batchWriter) flush() {
 // 4. 支持多种协议：TCP、UDP
 
 type networkWriter struct {
-	connType string    // 连接类型：tcp、udp
-	address  string    // 目标地址
+	connType string        // 连接类型：tcp、udp
+	address  string        // 目标地址
 	timeout  time.Duration // 连接超时
-	retry    int       // 重试次数
-	useTLS   bool      // 是否使用 TLS
-	conn     net.Conn  // 网络连接
-	mu       sync.RWMutex // 读写锁，保护连接
+	retry    int           // 重试次数
+	useTLS   bool          // 是否使用 TLS
+	conn     net.Conn      // 网络连接
+	mu       sync.RWMutex  // 读写锁，保护连接
 }
 
 // newNetworkWriter 创建新的网络写入器
@@ -297,12 +297,12 @@ func newNetworkWriter(cfg config.NetworkConfig) (*networkWriter, error) {
 		retry:    cfg.Retry,
 		useTLS:   cfg.TLS,
 	}
-	
+
 	// 建立初始连
 	if err := nw.connect(); err != nil {
 		return nil, err
 	}
-	
+
 	return nw, nil
 }
 
@@ -314,14 +314,14 @@ func newNetworkWriter(cfg config.NetworkConfig) (*networkWriter, error) {
 func (nw *networkWriter) connect() error {
 	nw.mu.Lock()
 	defer nw.mu.Unlock()
-	
+
 	if nw.conn != nil {
 		nw.conn.Close()
 	}
-	
+
 	var conn net.Conn
 	var err error
-	
+
 	switch nw.connType {
 	case "tcp":
 		if nw.useTLS {
@@ -334,11 +334,11 @@ func (nw *networkWriter) connect() error {
 	default:
 		return fmt.Errorf("unsupported network type: %s", nw.connType)
 	}
-	
+
 	if err != nil {
 		return err
 	}
-	
+
 	nw.conn = conn
 	return nil
 }
@@ -346,19 +346,19 @@ func (nw *networkWriter) connect() error {
 // Write 写入数据
 func (nw *networkWriter) Write(p []byte) (n int, err error) {
 	var conn net.Conn
-	
+
 	// 读取当前连接（读锁）
 	nw.mu.RLock()
 	conn = nw.conn
 	nw.mu.RUnlock()
-	
+
 	// 重试机制试 retry 次
 	for i := 0; i <= nw.retry; i++ {
 		n, err = conn.Write(p)
 		if err == nil {
 			return n, nil
 		}
-		
+
 		// 重连
 		if i < nw.retry {
 			if err := nw.connect(); err != nil {
@@ -369,7 +369,7 @@ func (nw *networkWriter) Write(p []byte) (n int, err error) {
 			nw.mu.RUnlock()
 		}
 	}
-	
+
 	return n, err
 }
 
@@ -395,10 +395,10 @@ func (nw *networkWriter) Close() error {
 // 4. 超时控制：避免阻塞
 
 type httpWriter struct {
-	url      string         // HTTP 端点 URL
-	timeout  time.Duration  // 超时时间
-	retry    int            // 重试次数
-	client   *http.Client   // HTTP 客户端
+	url     string        // HTTP 端点 URL
+	timeout time.Duration // 超时时间
+	retry   int           // 重试次数
+	client  *http.Client  // HTTP 客户端
 }
 
 // newHTTPWriter 创建新的HTTP写入器
@@ -430,12 +430,12 @@ func (hw *httpWriter) Write(p []byte) (n int, err error) {
 				return len(p), nil
 			}
 		}
-		
+
 		if i < hw.retry {
 			time.Sleep(time.Duration(i+1) * 100 * time.Millisecond)
 		}
 	}
-	
+
 	return 0, err
 }
 
@@ -457,29 +457,29 @@ func (hw *httpWriter) Close() error {
 // 5. 线程安全：支持高并发场景
 
 type SLogger struct {
-	logger      *slog.Logger     // 底层 slog 日志器
-	hooks       []Hook           // 钩子列表
-	fileLogger  *lumberjack.Logger // 文件轮转日志器
-	level       atomic.Value     // 日志级别（原子操作，支持动态调整）
-	
+	logger     *slog.Logger       // 底层 slog 日志器
+	hooks      []Hook             // 钩子列表
+	fileLogger *lumberjack.Logger // 文件轮转日志器
+	level      atomic.Value       // 日志级别（原子操作，支持动态调整）
+
 	// 高性能组件
-	ringBuf     *ringBuffer      // 无锁环形缓冲区
-	batchWriter *batchWriter     // 批量写入器
+	ringBuf       *ringBuffer    // 无锁环形缓冲区
+	batchWriter   *batchWriter   // 批量写入器
 	networkWriter io.WriteCloser // 网络写入器
-	
+
 	// 配置
-	cfg         *config.Config   // 配置信息
-	
+	cfg *config.Config // 配置信息
+
 	// 工作线程
-	workers     []*worker        // 工作线程列表
-	stopCh      chan struct{}    // 停止信号
-	wg          sync.WaitGroup   // 等待组，用于优雅关闭
-	
+	workers []*worker      // 工作线程列表
+	stopCh  chan struct{}  // 停止信号
+	wg      sync.WaitGroup // 等待组，用于优雅关闭
+
 	// 字段缓存
-	fieldCache  sync.Map         // 字段缓存，提高性能
-	
+	fieldCache sync.Map // 字段缓存，提高性能
+
 	// 对象池
-	usePool     bool             // 是否使用对象池
+	usePool bool // 是否使用对象池
 }
 
 // worker 工作线程
@@ -489,9 +489,9 @@ type SLogger struct {
 // 3. 优雅关闭：支持平滑停止
 
 type worker struct {
-	id       int           // 工作线程 ID
-	logger   *SLogger      // 日志器引用
-	stopCh   chan struct{} // 停止信号
+	id     int           // 工作线程 ID
+	logger *SLogger      // 日志器引用
+	stopCh chan struct{} // 停止信号
 }
 
 // newWorker 创建新的工作线程
@@ -559,7 +559,7 @@ func (w *worker) run() {
 func (w *worker) processBatch(batch []*logEntry) {
 	for _, entry := range batch {
 		w.logger.processEntry(entry)
-		
+
 		// 回收对象到对象池
 		if w.logger.usePool {
 			entry.Reset()
@@ -622,18 +622,18 @@ func newLogger(cfg *config.Config) (Logger, error) {
 		stopCh:  make(chan struct{}),
 		usePool: cfg.Log.Performance.UsePool,
 	}
-	
+
 	// 设置日志级别
 	slogger.SetLevel(cfg.Log.Level)
 
 	// 创建输出写入器
 	writers := []io.Writer{}
-	
+
 	// 控制台输出
 	if cfg.Log.Console.Enabled {
 		writers = append(writers, os.Stdout)
 	}
-	
+
 	// 文件输出
 	if cfg.Log.File.Enabled {
 		fileLogger := &lumberjack.Logger{
@@ -646,15 +646,15 @@ func newLogger(cfg *config.Config) (Logger, error) {
 		slogger.fileLogger = fileLogger
 		writers = append(writers, fileLogger)
 	}
-	
+
 	// 网络输出
 	if cfg.Log.Network.Enabled {
 		var nw io.WriteCloser
 		var err error
-		
+
 		if cfg.Log.Network.Type == "http" {
-			nw = newHTTPWriter(cfg.Log.Network.Address, 
-				time.Duration(cfg.Log.Network.Timeout)*time.Second, 
+			nw = newHTTPWriter(cfg.Log.Network.Address,
+				time.Duration(cfg.Log.Network.Timeout)*time.Second,
 				cfg.Log.Network.Retry)
 		} else {
 			nw, err = newNetworkWriter(cfg.Log.Network)
@@ -662,11 +662,11 @@ func newLogger(cfg *config.Config) (Logger, error) {
 				return nil, fmt.Errorf("create network writer error: %w", err)
 			}
 		}
-		
+
 		slogger.networkWriter = nw
 		writers = append(writers, nw)
 	}
-	
+
 	// 创建多输出
 	var writer io.Writer
 	if len(writers) == 1 {
@@ -674,25 +674,25 @@ func newLogger(cfg *config.Config) (Logger, error) {
 	} else {
 		writer = io.MultiWriter(writers...)
 	}
-	
+
 	// 创建批量写入器
 	if cfg.Log.Async.Enabled {
-		slogger.batchWriter = newBatchWriter(writer, cfg.Log.Async.BatchSize, 
+		slogger.batchWriter = newBatchWriter(writer, cfg.Log.Async.BatchSize,
 			time.Duration(cfg.Log.Async.FlushInterval)*time.Millisecond)
 		writer = slogger.batchWriter
 	}
-	
+
 	// 创建日志处理器
 	handler := slogger.createHandler(writer)
-	
+
 	// 创建日志记录器
 	slogger.logger = slog.New(handler)
-	
+
 	// 创建无锁环形缓冲区
 	if cfg.Log.Performance.LockFree {
 		slogger.ringBuf = newRingBuffer(cfg.Log.Async.BufferSize)
 	}
-	
+
 	// 启动工作线程
 	if cfg.Log.Async.Enabled {
 		slogger.workers = make([]*worker, cfg.Log.Async.Workers)
@@ -773,7 +773,7 @@ func GetLogger() Logger {
 	once.Do(func() {
 		var err error
 		var configPath string
-		
+
 		// 1. 首先检查环境变量
 		if envPath := os.Getenv("LOG_CONFIG_PATH"); envPath != "" {
 			configPath = envPath
@@ -781,7 +781,7 @@ func GetLogger() Logger {
 			// 2. 默认配置路径
 			configPath = "configs/config.yaml"
 		}
-		
+
 		globalLogger, err = New(configPath)
 		if err != nil {
 			// 如果配置文件加载失败，使用默认配置
@@ -835,7 +835,7 @@ func (l *SLogger) getCachedField(key string, value interface{}) (slog.Attr, bool
 	if !l.cfg.Log.FieldCache.Enabled {
 		return slog.Attr{}, false
 	}
-	
+
 	cacheKey := fmt.Sprintf("%s:%v", key, value)
 	if attr, ok := l.fieldCache.Load(cacheKey); ok {
 		return attr.(slog.Attr), true
@@ -851,7 +851,7 @@ func (l *SLogger) cacheField(key string, value interface{}) slog.Attr {
 	if !l.cfg.Log.FieldCache.Enabled {
 		return slog.Any(key, value)
 	}
-	
+
 	cacheKey := fmt.Sprintf("%s:%v", key, value)
 	attr := slog.Any(key, value)
 	l.fieldCache.Store(cacheKey, attr)
@@ -867,7 +867,7 @@ func (l *SLogger) processArgs(args []any) []any {
 	if !l.cfg.Log.FieldCache.Enabled {
 		return args
 	}
-	
+
 	processedArgs := make([]any, 0, len(args))
 	for i := 0; i < len(args); i += 2 {
 		if i+1 >= len(args) {
@@ -896,6 +896,13 @@ func (l *SLogger) processArgs(args []any) []any {
 // 3. 异步处理：使用无锁环形缓冲区
 // 4. 错误处理：缓冲区满时降级处理
 func (l *SLogger) log(level slog.Level, msg string, args ...any) {
+	defer func() {
+		if r := recover(); r != nil {
+			stackTrace := getStackTrace(10)
+			l.logger.Error("panic recovered in logger", "recover", r, "stacktrace", stackTrace)
+		}
+	}()
+
 	// 快速路径：检查日志级别（内联优化）
 	currentLevel := l.GetLevel()
 	switch currentLevel {
@@ -912,7 +919,7 @@ func (l *SLogger) log(level slog.Level, msg string, args ...any) {
 			return
 		}
 	}
-	
+
 	// 获取或创建日志条目（对象池优化）
 	var entry *logEntry
 	if l.usePool {
@@ -928,7 +935,7 @@ func (l *SLogger) log(level slog.Level, msg string, args ...any) {
 	entry.msg = msg
 	entry.args = append(entry.args, args...)
 	entry.hooks = l.hooks
-	
+
 	// 异步写入（无锁环形缓冲区）
 	if l.cfg.Log.Async.Enabled && l.ringBuf != nil {
 		if !l.ringBuf.Push(entry) {
@@ -1092,7 +1099,7 @@ func (l *SLogger) AddHook(hook Hook) Logger {
 // 3. 实时生效：立即更新日志处理器
 func (l *SLogger) SetLevel(level string) {
 	l.level.Store(level)
-	
+
 	// 重新创建处理器，使级别变更立即生效
 	if l.logger != nil {
 		var writer io.Writer
@@ -1103,7 +1110,7 @@ func (l *SLogger) SetLevel(level string) {
 		} else {
 			writer = os.Stdout
 		}
-		
+
 		handler := l.createHandler(writer)
 		l.logger = slog.New(handler)
 	}
@@ -1132,13 +1139,13 @@ func (l *SLogger) Sync() error {
 		for _, worker := range l.workers {
 			worker.stop()
 		}
-		
+
 		// 等待所有工作线程完成
 		for _, worker := range l.workers {
 			<-worker.stopCh
 		}
 	}
-	
+
 	// 刷新批量写入器
 	if l.batchWriter != nil {
 		l.batchWriter.flush()
@@ -1150,14 +1157,14 @@ func (l *SLogger) Sync() error {
 			return err
 		}
 	}
-	
+
 	// 关闭网络写入器
 	if l.networkWriter != nil {
 		if err := l.networkWriter.Close(); err != nil {
 			return err
 		}
 	}
-	
+
 	return nil
 }
 
@@ -1170,7 +1177,7 @@ func getStackTrace(depth int) string {
 	if depth <= 0 {
 		depth = 10
 	}
-	
+
 	stack := make([]byte, 1024*depth)
 	n := runtime.Stack(stack, false)
 	return string(stack[:n])
@@ -1231,16 +1238,16 @@ func NewSamplingHandler(handler slog.Handler, options SamplingOptions) *Sampling
 // 3. 性能优化：快速路径判断
 func (h *SamplingHandler) Handle(ctx context.Context, record slog.Record) error {
 	count := atomic.AddUint64(&h.sampleCount, 1)
-	
+
 	// 检查是否需要采样
 	if h.options.Initial > 0 && count <= uint64(h.options.Initial) {
 		return h.handler.Handle(ctx, record)
 	}
-	
+
 	if h.options.Thereafter > 0 && (count-uint64(h.options.Initial))%uint64(h.options.Thereafter) == 0 {
 		return h.handler.Handle(ctx, record)
 	}
-	
+
 	return nil
 }
 
