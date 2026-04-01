@@ -38,7 +38,7 @@ import (
 )
 
 func main() {
-    // 使用全局日志单例（自动加载 configs/config.yaml）
+    // 使用全局日志单例（从命令行参数 --config 获取配置文件路径）
     log := logger.GetLogger()
     
     // 基础日志
@@ -63,6 +63,7 @@ import (
 
 func main() {
     // 直接使用全局函数，无需获取 logger 实例
+    // 配置文件路径通过命令行参数 --config 指定
     logger.Info("应用启动", "version", "1.0.0", "env", "production")
     logger.Debug("调试信息", "detail", "some debug data")
     logger.Warn("警告信息", "threshold", 80)
@@ -71,6 +72,19 @@ func main() {
     // 同步日志（应用退出前调用）
     defer logger.Sync()
 }
+```
+
+#### 1.3 启动命令示例
+
+```bash
+# 使用开发环境配置
+go run main.go --config=configs/config.dev.yaml
+
+# 使用生产环境配置
+go run main.go --config=configs/config.prod.yaml
+
+# 使用高性能模式配置
+go run main.go --config=configs/config.highperf.yaml
 ```
 
 ### 2. 自定义配置

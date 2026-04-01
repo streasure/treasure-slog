@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"flag"
 	"fmt"
 	"io"
 	"log/slog"
@@ -772,63 +773,94 @@ func (l *SLogger) createHandler(writer io.Writer) slog.Handler {
 // 设计意图：
 // 1. 全局访问点：方便在应用各处使用
 // 2. 延迟初始化：首次使用时创建
-// 3. 容错处理：配置加载失败时使用默认配置
-// 4. 支持从环境变量或命令行参数获取配置文件路径
+// 3. 从命令行参数获取配置文件路径
+// 4. 无默认配置，必须提供配置文件
 func GetLogger() Logger {
 	once.Do(func() {
 		var err error
 		var configPath string
 
-		// 1. 首先检查环境变量
-		if envPath := os.Getenv("LOG_CONFIG_PATH"); envPath != "" {
-			configPath = envPath
-		} else {
-			// 2. 默认配置路径
-			configPath = "configs/config.yaml"
+		// 从命令行参数获取配置文件路径
+		flag.Parse()
+		configPath = *configFlag
+
+		if configPath == "" {
+			// 检查是否在测试环境中
+			if isTest() {
+				// 在测试环境中使用默认配置
+				defaultConfig := &config.Config{
+					Log: config.LogConfig{
+						Level:  "info",
+						Format: "json",
+						Async: config.AsyncConfig{
+							Enabled:       true,
+							BufferSize:    10000,
+							BatchSize:     100,
+							FlushInterval: 100,
+							Workers:       4,
+						},
+						Console: config.ConsoleConfig{
+							Enabled: true,
+							Format:  "text",
+						},
+						File: config.FileConfig{
+							Enabled: false,
+						},
+						Stacktrace: config.StackConfig{
+							Enabled: true,
+							Level:   "error",
+							Depth:   10,
+						},
+						Sampling: config.SamplingConfig{
+							Enabled:    false,
+							Initial:    1000,
+							Thereafter: 100,
+						},
+						Performance: config.PerformanceConfig{
+							LockFree: true,
+							UsePool:  true,
+							Prealloc: true,
+						},
+					},
+				}
+				globalLogger, _ = newLogger(defaultConfig)
+				return
+			}
+			panic("配置文件路径未提供，请使用 --config 参数指定")
 		}
 
 		globalLogger, err = New(configPath)
 		if err != nil {
-			// 如果配置文件加载失败，使用默认配置
-			defaultConfig := &config.Config{
-				Log: config.LogConfig{
-					Level:  "info",
-					Format: "json",
-					Async: config.AsyncConfig{
-						Enabled:       true,
-						BufferSize:    10000,
-						BatchSize:     100,
-						FlushInterval: 100,
-						Workers:       4,
-					},
-					Console: config.ConsoleConfig{
-						Enabled: true,
-						Format:  "text",
-					},
-					File: config.FileConfig{
-						Enabled: false,
-					},
-					Stacktrace: config.StackConfig{
-						Enabled: true,
-						Level:   "error",
-						Depth:   10,
-					},
-					Sampling: config.SamplingConfig{
-						Enabled:    false,
-						Initial:    1000,
-						Thereafter: 100,
-					},
-					Performance: config.PerformanceConfig{
-						LockFree: true,
-						UsePool:  true,
-						Prealloc: true,
-					},
-				},
-			}
-			globalLogger, _ = newLogger(defaultConfig)
+			panic(fmt.Sprintf("加载配置文件失败: %v", err))
 		}
 	})
 	return globalLogger
+}
+
+// 命令行参数
+var configFlag = flag.String("config", "", "配置文件路径")
+
+// isTest 检查是否在测试环境中
+func isTest() bool {
+	// 检查是否设置了测试相关的环境变量
+	if os.Getenv("GO_TESTING") == "1" {
+		return true
+	}
+
+	// 检查命令行参数
+	for _, arg := range os.Args {
+		if len(arg) > 5 && arg[:5] == "-test" {
+			return true
+		}
+	}
+
+	// 检查进程名称是否包含"test"
+	procName := os.Args[0]
+	if len(procName) > 4 && procName[len(procName)-4:] == ".test" {
+		return true
+	}
+
+	return false
 }
 
 // getCachedField 获取缓存的字段

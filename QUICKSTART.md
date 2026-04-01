@@ -25,7 +25,7 @@ import (
 )
 
 func main() {
-    // 获取全局日志实例（自动加载 configs/config.yaml）
+    // 获取全局日志实例（从命令行参数 --config 获取配置文件路径）
     log := logger.GetLogger()
     defer log.Sync() // 程序退出前必须调用
     
@@ -46,12 +46,26 @@ import (
 
 func main() {
     // 直接使用全局函数，无需获取日志实例
+    // 配置文件路径通过命令行参数 --config 指定
     defer logger.Sync() // 程序退出前必须调用
     
     // 记录日志
     logger.Info("Hello", "name", "World")
     logger.Error("Something wrong", "error", "connection failed")
 }
+```
+
+#### 2.3 启动命令示例
+
+```bash
+# 使用开发环境配置
+go run main.go --config=configs/config.dev.yaml
+
+# 使用生产环境配置
+go run main.go --config=configs/config.prod.yaml
+
+# 使用高性能模式配置
+go run main.go --config=configs/config.highperf.yaml
 ```
 
 ### 3. 通过命令行参数指定配置文件
