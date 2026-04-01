@@ -573,7 +573,12 @@ func (w *worker) processBatch(batch []*logEntry) {
 // 1. 发送停止信号
 // 2. 触发工作线程的清理逻辑
 func (w *worker) stop() {
-	close(w.stopCh)
+	select {
+	case <-w.stopCh:
+		// 通道已经关闭，不需要再次关闭
+	default:
+		close(w.stopCh)
+	}
 }
 
 // 全局日志单例
@@ -1193,6 +1198,86 @@ func Recover() {
 		stackTrace := getStackTrace(10)
 		GetLogger().Error("panic recovered", "recover", r, "stacktrace", stackTrace)
 	}
+}
+
+// Debug 记录调试级别日志
+// 设计意图：
+// 1. 提供便捷的全局日志接口
+// 2. 直接调用全局日志实例的 Debug 方法
+func Debug(msg string, args ...any) {
+	GetLogger().Debug(msg, args...)
+}
+
+// Info 记录信息级别日志
+// 设计意图：
+// 1. 提供便捷的全局日志接口
+// 2. 直接调用全局日志实例的 Info 方法
+func Info(msg string, args ...any) {
+	GetLogger().Info(msg, args...)
+}
+
+// Warn 记录警告级别日志
+// 设计意图：
+// 1. 提供便捷的全局日志接口
+// 2. 直接调用全局日志实例的 Warn 方法
+func Warn(msg string, args ...any) {
+	GetLogger().Warn(msg, args...)
+}
+
+// Error 记录错误级别日志
+// 设计意图：
+// 1. 提供便捷的全局日志接口
+// 2. 直接调用全局日志实例的 Error 方法
+func Error(msg string, args ...any) {
+	GetLogger().Error(msg, args...)
+}
+
+// With 添加键值对到日志记录器
+// 设计意图：
+// 1. 提供便捷的全局日志接口
+// 2. 直接调用全局日志实例的 With 方法
+func With(args ...any) Logger {
+	return GetLogger().With(args...)
+}
+
+// WithContext 添加上下文到日志记录器
+// 设计意图：
+// 1. 提供便捷的全局日志接口
+// 2. 直接调用全局日志实例的 WithContext 方法
+func WithContext(ctx context.Context) Logger {
+	return GetLogger().WithContext(ctx)
+}
+
+// AddHook 添加钩子到日志记录器
+// 设计意图：
+// 1. 提供便捷的全局日志接口
+// 2. 直接调用全局日志实例的 AddHook 方法
+func AddHook(hook Hook) Logger {
+	return GetLogger().AddHook(hook)
+}
+
+// Sync 同步日志，实现 Graceful Shutdown
+// 设计意图：
+// 1. 提供便捷的全局日志接口
+// 2. 直接调用全局日志实例的 Sync 方法
+func Sync() error {
+	return GetLogger().Sync()
+}
+
+// SetLevel 动态设置日志级别
+// 设计意图：
+// 1. 提供便捷的全局日志接口
+// 2. 直接调用全局日志实例的 SetLevel 方法
+func SetLevel(level string) {
+	GetLogger().SetLevel(level)
+}
+
+// GetLevel 获取当前日志级别
+// 设计意图：
+// 1. 提供便捷的全局日志接口
+// 2. 直接调用全局日志实例的 GetLevel 方法
+func GetLevel() string {
+	return GetLogger().GetLevel()
 }
 
 // SamplingOptions 日志采样选项

@@ -15,6 +15,8 @@ go mod tidy
 
 ### 2. 基础使用（最简单的方式）
 
+#### 2.1 使用全局日志实例
+
 ```go
 package main
 
@@ -30,6 +32,25 @@ func main() {
     // 记录日志
     log.Info("Hello", "name", "World")
     log.Error("Something wrong", "error", "connection failed")
+}
+```
+
+#### 2.2 使用全局函数接口（推荐）
+
+```go
+package main
+
+import (
+    logger "github.com/streasure/treasure-slog"
+)
+
+func main() {
+    // 直接使用全局函数，无需获取日志实例
+    defer logger.Sync() // 程序退出前必须调用
+    
+    // 记录日志
+    logger.Info("Hello", "name", "World")
+    logger.Error("Something wrong", "error", "connection failed")
 }
 ```
 
@@ -169,6 +190,8 @@ log:
 
 ### 基础日志
 
+#### 使用实例方法
+
 ```go
 log.Debug("调试信息")
 log.Info("普通信息", "key", "value")
@@ -176,14 +199,34 @@ log.Warn("警告信息", "count", 42)
 log.Error("错误信息", "error", err)
 ```
 
+#### 使用全局函数
+
+```go
+logger.Debug("调试信息")
+logger.Info("普通信息", "key", "value")
+logger.Warn("警告信息", "count", 42)
+logger.Error("错误信息", "error", err)
+```
+
 ### 添加固定字段
+
+#### 使用实例方法
 
 ```go
 userLog := log.With("user_id", "123", "ip", "1.2.3.4")
 userLog.Info("登录")  // 自动包含 user_id 和 ip
 ```
 
+#### 使用全局函数
+
+```go
+userLog := logger.With("user_id", "123", "ip", "1.2.3.4")
+userLog.Info("登录")  // 自动包含 user_id 和 ip
+```
+
 ### Context 追踪
+
+#### 使用实例方法
 
 ```go
 ctx := context.WithValue(ctx, "request_id", "abc-123")
@@ -191,11 +234,28 @@ ctxLog := log.WithContext(ctx)
 ctxLog.Info("处理请求")  // 自动包含 request_id
 ```
 
+#### 使用全局函数
+
+```go
+ctx := context.WithValue(ctx, "request_id", "abc-123")
+ctxLog := logger.WithContext(ctx)
+ctxLog.Info("处理请求")  // 自动包含 request_id
+```
+
 ### 动态调整级别
+
+#### 使用实例方法
 
 ```go
 log.SetLevel("debug")  // 切换到 debug 级别
 current := log.GetLevel()  // 获取当前级别
+```
+
+#### 使用全局函数
+
+```go
+logger.SetLevel("debug")  // 切换到 debug 级别
+current := logger.GetLevel()  // 获取当前级别
 ```
 
 ### Panic 恢复

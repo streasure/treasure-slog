@@ -99,6 +99,34 @@ func TestGlobalLogger(t *testing.T) {
 	// 测试全局日志的使用
 	logger1.Info("Global logger info message", "key", "value")
 	logger1.Error("Global logger error message", "key", "value")
+
+	// 测试新的全局函数接口
+	Info("Global Info function", "key", "value")
+	Debug("Global Debug function", "key", "value")
+	Warn("Global Warn function", "key", "value")
+	Error("Global Error function", "key", "value")
+
+	// 测试全局 With 函数
+	withLogger := With("context", "test")
+	withLogger.Info("Global With function")
+
+	// 测试全局 WithContext 函数
+	ctx := context.Background()
+	ctxLogger := WithContext(ctx)
+	ctxLogger.Info("Global WithContext function")
+
+	// 测试全局 SetLevel 和 GetLevel 函数
+	SetLevel("debug")
+	level := GetLevel()
+	if level != "debug" {
+		t.Errorf("Expected level to be 'debug', got '%s'", level)
+	}
+
+	// 测试全局 Sync 函数
+	err := Sync()
+	if err != nil {
+		t.Errorf("Sync error: %v", err)
+	}
 }
 
 func TestPanicRecovery(t *testing.T) {

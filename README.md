@@ -28,6 +28,8 @@ go get github.com/streasure/treasure-slog
 
 ### 1. 基础使用
 
+#### 1.1 使用全局日志单例
+
 ```go
 package main
 
@@ -47,6 +49,27 @@ func main() {
     
     // 同步日志（应用退出前调用）
     defer log.Sync()
+}
+```
+
+#### 1.2 使用全局函数接口（推荐）
+
+```go
+package main
+
+import (
+    logger "github.com/streasure/treasure-slog"
+)
+
+func main() {
+    // 直接使用全局函数，无需获取 logger 实例
+    logger.Info("应用启动", "version", "1.0.0", "env", "production")
+    logger.Debug("调试信息", "detail", "some debug data")
+    logger.Warn("警告信息", "threshold", 80)
+    logger.Error("错误信息", "error", "connection failed")
+    
+    // 同步日志（应用退出前调用）
+    defer logger.Sync()
 }
 ```
 
@@ -73,6 +96,8 @@ func main() {
 
 ### 3. 带字段的日志
 
+#### 3.1 使用实例方法
+
 ```go
 // With 添加固定字段
 userLog := log.With("user_id", "12345", "ip", "192.168.1.1")
@@ -84,7 +109,18 @@ userLog.Info("用户操作", "action", "buy")
 // {"level":"INFO","msg":"用户操作","user_id":"12345","ip":"192.168.1.1","action":"buy"}
 ```
 
+#### 3.2 使用全局函数
+
+```go
+// 使用全局 With 函数
+userLog := logger.With("user_id", "12345", "ip", "192.168.1.1")
+userLog.Info("用户登录")
+userLog.Info("用户操作", "action", "buy")
+```
+
 ### 4. Context 自动注入
+
+#### 4.1 使用实例方法
 
 ```go
 package main
@@ -112,7 +148,32 @@ func main() {
 }
 ```
 
+#### 4.2 使用全局函数
+
+```go
+package main
+
+import (
+    "context"
+    logger "github.com/streasure/treasure-slog"
+)
+
+func main() {
+    // 创建带追踪信息的 context
+    ctx := context.Background()
+    ctx = context.WithValue(ctx, "request_id", "req-abc-123")
+    ctx = context.WithValue(ctx, "user_id", "user-456")
+    ctx = context.WithValue(ctx, "trace_id", "trace-xyz-789")
+    
+    // 使用全局 WithContext 函数
+    ctxLog := logger.WithContext(ctx)
+    ctxLog.Info("处理请求")
+}
+```
+
 ### 5. Hook 机制
+
+#### 5.1 使用实例方法
 
 ```go
 package main
@@ -144,7 +205,39 @@ func main() {
 }
 ```
 
+#### 5.2 使用全局函数
+
+```go
+package main
+
+import (
+    "fmt"
+    "github.com/streasure/treasure-slog"
+)
+
+// 自定义 Hook
+type MetricsHook struct {
+    counter map[string]int
+}
+
+func (h *MetricsHook) Run(msg string, level string, args ...any) {
+    h.counter[level]++
+    fmt.Printf("[Metrics] %s 级别日志计数: %d\n", level, h.counter[level])
+}
+
+func main() {
+    // 使用全局 AddHook 函数
+    metricsHook := &MetricsHook{counter: make(map[string]int)}
+    hookedLog := logger.AddHook(metricsHook)
+    
+    hookedLog.Info("测试消息")
+    hookedLog.Error("错误消息")
+}
+```
+
 ### 6. 动态调整日志级别
+
+#### 6.1 使用实例方法
 
 ```go
 package main
@@ -166,6 +259,29 @@ func main() {
     
     // 查看当前级别
     fmt.Println("当前级别:", log.GetLevel())
+}
+```
+
+#### 6.2 使用全局函数
+
+```go
+package main
+
+import (
+    logger "github.com/streasure/treasure-slog"
+)
+
+func main() {
+    // 初始级别为 info
+    logger.Info("这条会显示")
+    logger.Debug("这条不会显示")
+    
+    // 动态调整为 debug 级别
+    logger.SetLevel("debug")
+    logger.Debug("现在这条会显示了")
+    
+    // 查看当前级别
+    fmt.Println("当前级别:", logger.GetLevel())
 }
 ```
 

@@ -63,6 +63,12 @@ func TestAllFeatures(t *testing.T) {
 	globalLogger.Info("Global logger info message", "key", "value")
 	globalLogger.Error("Global logger error message", "key", "value")
 
+	// 测试新的全局函数接口
+	Info("Global Info function", "key", "value")
+	Debug("Global Debug function", "key", "value")
+	Warn("Global Warn function", "key", "value")
+	Error("Global Error function", "key", "value")
+
 	// 3. 测试 Hook 链
 	t.Log("=== Testing hook chain ===")
 	hookCalled := false
