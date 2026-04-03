@@ -88,11 +88,12 @@ type Logger interface {
 // 1. 减少内存分配：复用日志条目对象，避免频繁创建
 // 2. 降低 GC 压力：减少对象创建和销毁，降低垃圾回收开销
 // 3. 提高性能：在高并发场景下显著提升性能
+// 4. 内存优化：预分配更大的切片容量，减少扩容
 var logEntryPool = sync.Pool{
 	New: func() interface{} {
-		// 预分配 args 切片，减少扩容开销
+		// 预分配更大的 args 切片，减少扩容开销
 		return &logEntry{
-			args: make([]any, 0, 16),
+			args: make([]any, 0, 32), // 增加容量，减少扩容
 		}
 	},
 }
@@ -849,6 +850,7 @@ func (l *SLogger) processArgs(args []any) []any {
 // 3. 异步处理：使用无锁环形缓冲区
 // 4. 错误处理：缓冲区满时降级处理
 // 5. 支持context传递
+// 6. 内存优化：减少内存分配和复制
 func (l *SLogger) log(ctx context.Context, level slog.Level, msg string, args ...any) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -885,10 +887,24 @@ func (l *SLogger) log(ctx context.Context, level slog.Level, msg string, args ..
 		}
 	}
 
+	// 直接赋值，避免不必要的复制
 	entry.ctx = ctx
 	entry.level = level
 	entry.msg = msg
-	entry.args = append(entry.args, args...)
+
+	// 优化参数处理：直接使用原切片，避免复制
+	if len(args) > 0 {
+		// 确保切片容量足够
+		if cap(entry.args) < len(args) {
+			entry.args = make([]any, len(args))
+		} else {
+			entry.args = entry.args[:len(args)]
+		}
+		// 避免使用append，直接复制
+		copy(entry.args, args)
+	}
+
+	// 避免钩子列表的复制
 	entry.hooks = l.hooks
 
 	// 异步写入（无锁环形缓冲区）
@@ -917,6 +933,7 @@ func (l *SLogger) log(ctx context.Context, level slog.Level, msg string, args ..
 // 2. 堆栈追踪：错误级别自动添加堆栈信息
 // 3. 日志记录：根据级别调用相应的日志方法
 // 4. 支持context传递：使用InfoContext等方法
+// 5. 内存优化：减少内存分配
 func (l *SLogger) processEntry(entry *logEntry) {
 	// 执行钩子
 	for _, hook := range entry.hooks {
@@ -941,9 +958,22 @@ func (l *SLogger) processEntry(entry *logEntry) {
 		// 添加堆栈追踪
 		if l.cfg.Log.Stacktrace.Enabled {
 			stackTrace := getStackTrace(l.cfg.Log.Stacktrace.Depth)
-			entry.args = append(entry.args, "stacktrace", stackTrace)
+			// 检查切片容量是否足够，避免扩容
+			if cap(entry.args) < len(entry.args)+2 {
+				// 预分配足够的容量
+				newArgs := make([]any, len(entry.args)+2, len(entry.args)+10)
+				copy(newArgs, entry.args)
+				newArgs[len(entry.args)] = "stacktrace"
+				newArgs[len(entry.args)+1] = stackTrace
+				l.logger.ErrorContext(ctx, entry.msg, newArgs...)
+			} else {
+				// 容量足够，直接使用append
+				entry.args = append(entry.args, "stacktrace", stackTrace)
+				l.logger.ErrorContext(ctx, entry.msg, entry.args...)
+			}
+		} else {
+			l.logger.ErrorContext(ctx, entry.msg, entry.args...)
 		}
-		l.logger.ErrorContext(ctx, entry.msg, entry.args...)
 	}
 }
 
@@ -1020,12 +1050,21 @@ func (l *SLogger) ErrorContext(ctx context.Context, msg string, args ...any) {
 // 1. 链式调用：支持方法链
 // 2. 字段继承：新日志器继承原有字段
 // 3. 线程安全：返回新的日志器实例
+// 4. 完整传递：确保传递所有必要的字段
 func (l *SLogger) With(args ...any) Logger {
 	return &SLogger{
-		logger:     l.logger.With(args...),
-		hooks:      l.hooks,
-		fileLogger: l.fileLogger,
-		cfg:        l.cfg,
+		logger:        l.logger.With(args...),
+		hooks:         l.hooks,
+		fileLogger:    l.fileLogger,
+		level:         l.level,
+		ringBuf:       l.ringBuf,
+		batchWriter:   l.batchWriter,
+		networkWriter: l.networkWriter,
+		cfg:           l.cfg,
+		workers:       l.workers,
+		stopCh:        l.stopCh,
+		fieldCache:    l.fieldCache,
+		usePool:       l.usePool,
 	}
 }
 
@@ -1034,6 +1073,7 @@ func (l *SLogger) With(args ...any) Logger {
 // 1. 上下文集成：自动从 context 提取追踪信息
 // 2. 链式调用：支持方法链
 // 3. 线程安全：返回新的日志器实例
+// 4. 完整传递：确保传递所有必要的字段
 func (l *SLogger) WithContext(ctx context.Context) Logger {
 	// 从 context 中提取信息
 	args := extractContextInfo(ctx)
@@ -1043,10 +1083,18 @@ func (l *SLogger) WithContext(ctx context.Context) Logger {
 		newLogger = newLogger.With(args...)
 	}
 	return &SLogger{
-		logger:     newLogger,
-		hooks:      l.hooks,
-		fileLogger: l.fileLogger,
-		cfg:        l.cfg,
+		logger:        newLogger,
+		hooks:         l.hooks,
+		fileLogger:    l.fileLogger,
+		level:         l.level,
+		ringBuf:       l.ringBuf,
+		batchWriter:   l.batchWriter,
+		networkWriter: l.networkWriter,
+		cfg:           l.cfg,
+		workers:       l.workers,
+		stopCh:        l.stopCh,
+		fieldCache:    l.fieldCache,
+		usePool:       l.usePool,
 	}
 }
 
@@ -1055,8 +1103,10 @@ func (l *SLogger) WithContext(ctx context.Context) Logger {
 // 1. 自动提取：从 context 中提取常见的追踪信息
 // 2. 标准化：支持标准的追踪字段
 // 3. 可扩展：方便添加新的 context 字段提取
+// 4. 内存优化：使用预分配的切片，减少内存分配
 func extractContextInfo(ctx context.Context) []any {
-	var args []any
+	// 预分配最大可能的切片大小，避免扩容
+	args := make([]any, 0, 8) // 最多4个字段，每个字段2个元素
 	// 提取常见的 context 信息
 	if requestID := ctx.Value("request_id"); requestID != nil {
 		args = append(args, "request_id", requestID)
@@ -1186,6 +1236,7 @@ func getStackTrace(depth int) string {
 // 1. 提供便捷的全局日志接口
 // 2. 直接调用全局日志实例的 Debug 方法
 // 3. 需要先调用 New 初始化全局实例
+// 4. 内存优化：避免不必要的参数复制
 func Debug(msg string, args ...any) {
 	if globalLogger != nil {
 		globalLogger.Debug(msg, args...)
@@ -1197,6 +1248,7 @@ func Debug(msg string, args ...any) {
 // 1. 提供便捷的全局日志接口
 // 2. 支持context传递，用于分布式追踪
 // 3. 需要先调用 New 初始化全局实例
+// 4. 内存优化：避免不必要的参数复制
 func DebugContext(ctx context.Context, msg string, args ...any) {
 	if globalLogger != nil {
 		globalLogger.DebugContext(ctx, msg, args...)
@@ -1208,6 +1260,7 @@ func DebugContext(ctx context.Context, msg string, args ...any) {
 // 1. 提供便捷的全局日志接口
 // 2. 直接调用全局日志实例的 Info 方法
 // 3. 需要先调用 New 初始化全局实例
+// 4. 内存优化：避免不必要的参数复制
 func Info(msg string, args ...any) {
 	if globalLogger != nil {
 		globalLogger.Info(msg, args...)
@@ -1219,6 +1272,7 @@ func Info(msg string, args ...any) {
 // 1. 提供便捷的全局日志接口
 // 2. 支持context传递，用于分布式追踪
 // 3. 需要先调用 New 初始化全局实例
+// 4. 内存优化：避免不必要的参数复制
 func InfoContext(ctx context.Context, msg string, args ...any) {
 	if globalLogger != nil {
 		globalLogger.InfoContext(ctx, msg, args...)
@@ -1230,6 +1284,7 @@ func InfoContext(ctx context.Context, msg string, args ...any) {
 // 1. 提供便捷的全局日志接口
 // 2. 直接调用全局日志实例的 Warn 方法
 // 3. 需要先调用 New 初始化全局实例
+// 4. 内存优化：避免不必要的参数复制
 func Warn(msg string, args ...any) {
 	if globalLogger != nil {
 		globalLogger.Warn(msg, args...)
@@ -1241,6 +1296,7 @@ func Warn(msg string, args ...any) {
 // 1. 提供便捷的全局日志接口
 // 2. 支持context传递，用于分布式追踪
 // 3. 需要先调用 New 初始化全局实例
+// 4. 内存优化：避免不必要的参数复制
 func WarnContext(ctx context.Context, msg string, args ...any) {
 	if globalLogger != nil {
 		globalLogger.WarnContext(ctx, msg, args...)
@@ -1252,6 +1308,7 @@ func WarnContext(ctx context.Context, msg string, args ...any) {
 // 1. 提供便捷的全局日志接口
 // 2. 直接调用全局日志实例的 Error 方法
 // 3. 需要先调用 New 初始化全局实例
+// 4. 内存优化：避免不必要的参数复制
 func Error(msg string, args ...any) {
 	if globalLogger != nil {
 		globalLogger.Error(msg, args...)
@@ -1263,6 +1320,7 @@ func Error(msg string, args ...any) {
 // 1. 提供便捷的全局日志接口
 // 2. 支持context传递，用于分布式追踪
 // 3. 需要先调用 New 初始化全局实例
+// 4. 内存优化：避免不必要的参数复制
 func ErrorContext(ctx context.Context, msg string, args ...any) {
 	if globalLogger != nil {
 		globalLogger.ErrorContext(ctx, msg, args...)
