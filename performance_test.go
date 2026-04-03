@@ -99,8 +99,8 @@ log:
 	}
 }
 
-// BenchmarkAsyncVsSync 异步 vs 同步性能对比
-func BenchmarkAsyncVsSync(b *testing.B) {
+// BenchmarkAsync 异步性能测试
+func BenchmarkAsync(b *testing.B) {
 	// 确保日志目录存在
 	logDir := "logs"
 	if err := os.MkdirAll(logDir, 0755); err != nil {
@@ -108,9 +108,8 @@ func BenchmarkAsyncVsSync(b *testing.B) {
 	}
 
 	// 测试异步模式
-	b.Run("Async", func(b *testing.B) {
-		// 创建异步配置文件
-		configContent := `
+	// 创建异步配置文件
+	configContent := `
 log:
   level: info
   format: json
@@ -136,89 +135,36 @@ log:
     prealloc: true
 `
 
-		// 写入临时配置文件
-		configPath := "./logs/async_config.yaml"
-		if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
-			b.Fatalf("Failed to write config file: %v", err)
-		}
-		defer os.Remove(configPath)
-		defer os.Remove("./logs/async_benchmark.log")
+	// 写入临时配置文件
+	configPath := "./logs/async_config.yaml"
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		b.Fatalf("Failed to write config file: %v", err)
+	}
+	defer os.Remove(configPath)
+	defer os.Remove("./logs/async_benchmark.log")
 
-		// 创建日志记录器
-		logger, err := New(configPath)
-		if err != nil {
-			b.Fatalf("Failed to create logger: %v", err)
-		}
-		defer logger.Sync()
+	// 创建日志记录器
+	logger, err := New(configPath)
+	if err != nil {
+		b.Fatalf("Failed to create logger: %v", err)
+	}
+	defer logger.Sync()
 
-		// 预热
-		for i := 0; i < 1000; i++ {
-			logger.Info("Warmup", "i", i)
-		}
-		time.Sleep(100 * time.Millisecond)
+	// 预热
+	for i := 0; i < 1000; i++ {
+		logger.Info("Warmup", "i", i)
+	}
+	time.Sleep(100 * time.Millisecond)
 
-		// 测试
-		b.ResetTimer()
-		b.RunParallel(func(pb *testing.PB) {
-			for pb.Next() {
-				logger.Info("Async log message", "key", "value")
-			}
-		})
-		b.StopTimer()
-		logger.Sync()
+	// 测试
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			logger.Info("Async log message", "key", "value")
+		}
 	})
-
-	// 测试同步模式
-	b.Run("Sync", func(b *testing.B) {
-		// 创建同步配置文件
-		configContent := `
-log:
-  level: info
-  format: json
-  async:
-    enabled: false
-  console:
-    enabled: false
-  file:
-    enabled: true
-    path: ./logs/sync_benchmark.log
-    rotate:
-      max_size: 1000
-      max_backups: 10
-      max_age: 30
-      compress: false
-`
-
-		// 写入临时配置文件
-		configPath := "./logs/sync_config.yaml"
-		if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
-			b.Fatalf("Failed to write config file: %v", err)
-		}
-		defer os.Remove(configPath)
-		defer os.Remove("./logs/sync_benchmark.log")
-
-		// 创建日志记录器
-		logger, err := New(configPath)
-		if err != nil {
-			b.Fatalf("Failed to create logger: %v", err)
-		}
-		defer logger.Sync()
-
-		// 预热
-		for i := 0; i < 1000; i++ {
-			logger.Info("Warmup", "i", i)
-		}
-
-		// 测试
-		b.ResetTimer()
-		b.RunParallel(func(pb *testing.PB) {
-			for pb.Next() {
-				logger.Info("Sync log message", "key", "value")
-			}
-		})
-		b.StopTimer()
-		logger.Sync()
-	})
+	b.StopTimer()
+	logger.Sync()
 }
 
 // BenchmarkDifferentLevels 不同日志级别性能测试

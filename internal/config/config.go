@@ -27,11 +27,10 @@ type LogConfig struct {
 
 // AsyncConfig 异步配置
 type AsyncConfig struct {
-	Enabled       bool `yaml:"enabled"`
-	BufferSize    int  `yaml:"buffer_size"`
-	BatchSize     int  `yaml:"batch_size"`
-	FlushInterval int  `yaml:"flush_interval"`
-	Workers       int  `yaml:"workers"`
+	BufferSize    int `yaml:"buffer_size"`
+	BatchSize     int `yaml:"batch_size"`
+	FlushInterval int `yaml:"flush_interval"`
+	Workers       int `yaml:"workers"`
 }
 
 // ConsoleConfig 控制台输出配置

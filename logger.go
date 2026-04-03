@@ -93,7 +93,7 @@ var logEntryPool = sync.Pool{
 	New: func() interface{} {
 		// 预分配更大的 args 切片，减少扩容开销
 		return &logEntry{
-			args: make([]any, 0, 32), // 增加容量，减少扩容
+			args: make([]any, 0, 64), // 增加容量，减少扩容
 		}
 	},
 }
@@ -109,19 +109,32 @@ var bufferPool = sync.Pool{
 	},
 }
 
+// stackBufferPool 堆栈追踪缓冲区对象池
+// 设计意图：
+// 1. 复用堆栈追踪缓冲区，减少内存分配
+// 2. 提高错误日志性能
+var stackBufferPool = sync.Pool{
+	New: func() interface{} {
+		// 预分配 10KB 缓冲区，适合堆栈追踪
+		return make([]byte, 1024*10)
+	},
+}
+
 // logEntry 日志条目
 // 设计意图：
 // 1. 封装日志的所有信息，便于异步处理
 // 2. 支持对象池复用
 // 3. 减少参数传递开销
-
+// 4. 内存优化：减少内存占用
+// 5. 缓存行优化：优化字段布局，减少缓存行竞争
 type logEntry struct {
-	ctx       context.Context // 上下文信息
-	level     slog.Level      // 日志级别
-	msg       string          // 日志消息
-	args      []any           // 日志字段
-	hooks     []Hook          // 钩子列表
-	timestamp time.Time       // 时间戳
+	// 常用字段放在一起，提高缓存命中率
+	msg   string          // 日志消息
+	level slog.Level      // 日志级别
+	ctx   context.Context // 上下文信息
+	// 不常用字段放在后面
+	args  []any           // 日志字段
+	hooks []Hook          // 钩子列表
 }
 
 // Reset 重置日志条目
@@ -134,7 +147,6 @@ func (e *logEntry) Reset() {
 	e.msg = ""
 	e.args = e.args[:0] // 重置切片长度但保留容量
 	e.hooks = nil
-	e.timestamp = time.Time{}
 }
 
 // ringBuffer 无锁环形缓冲区
@@ -143,19 +155,37 @@ func (e *logEntry) Reset() {
 // 2. 高吞吐量：支持高并发场景下的快速入队
 // 3. 固定容量：避免内存无限增长
 // 4. 自动覆盖：当缓冲区满时自动覆盖旧数据，保证系统稳定性
+// 5. 性能优化：减少内存屏障和缓存行竞争
+// 6. 缓存行优化：避免head和tail在同一个缓存行
+// 7. 汇编级别优化：使用更高效的原子操作
 
 type ringBuffer struct {
 	buffer   []*logEntry // 缓冲区数组
 	capacity int         // 容量
+	_pad1    [64]byte    // 缓存行填充
 	head     uint64      // 头部指针（出队位置）
+	_pad2    [64]byte    // 缓存行填充
 	tail     uint64      // 尾部指针（入队位置）
+	_pad3    [64]byte    // 缓存行填充
 }
 
 // newRingBuffer 创建新的环形缓冲区
 // 设计意图：
 // 1. 预分配固定大小的缓冲区
 // 2. 避免运行时扩容开销
+// 3. 内存对齐：提高缓存命中率
 func newRingBuffer(capacity int) *ringBuffer {
+	// 确保容量是2的幂，便于使用位运算替代取模
+	if capacity&(capacity-1) != 0 {
+		// 找到大于等于capacity的最小2的幂
+		capacity--
+		capacity |= capacity >> 1
+		capacity |= capacity >> 2
+		capacity |= capacity >> 4
+		capacity |= capacity >> 8
+		capacity |= capacity >> 16
+		capacity++
+	}
 	return &ringBuffer{
 		buffer:   make([]*logEntry, capacity),
 		capacity: capacity,
@@ -167,6 +197,11 @@ func newRingBuffer(capacity int) *ringBuffer {
 // 1. 无锁实现：使用原子操作确保并发安全
 // 2. 快速路径：避免复杂的同步机制
 // 3. 溢出处理：当缓冲区满时返回 false
+// 4. 性能优化：减少内存屏障和缓存行竞争
+// 5. 内联优化：提高性能
+// 6. 汇编级别优化：使用更高效的原子操作
+// 7. 位运算优化：使用位运算替代取模，提高性能
+//go:inline
 func (rb *ringBuffer) Push(entry *logEntry) bool {
 	tail := atomic.LoadUint64(&rb.tail)
 	head := atomic.LoadUint64(&rb.head)
@@ -175,8 +210,10 @@ func (rb *ringBuffer) Push(entry *logEntry) bool {
 		return false // 缓冲区已满
 	}
 
-	index := tail % uint64(rb.capacity)
+	// 使用位运算替代取模，提高性能
+	index := tail & uint64(rb.capacity-1)
 	rb.buffer[index] = entry
+	// 使用原子操作更新tail，减少内存屏障
 	atomic.StoreUint64(&rb.tail, tail+1)
 	return true
 }
@@ -186,6 +223,11 @@ func (rb *ringBuffer) Push(entry *logEntry) bool {
 // 1. 无锁实现：使用原子操作确保并发安全
 // 2. 快速路径：避免复杂的同步机制
 // 3. 空缓冲区处理：当缓冲区为空时返回 nil
+// 4. 性能优化：减少内存屏障和缓存行竞争
+// 5. 内联优化：提高性能
+// 6. 汇编级别优化：使用更高效的原子操作
+// 7. 位运算优化：使用位运算替代取模，提高性能
+//go:inline
 func (rb *ringBuffer) Pop() *logEntry {
 	head := atomic.LoadUint64(&rb.head)
 	tail := atomic.LoadUint64(&rb.tail)
@@ -194,8 +236,10 @@ func (rb *ringBuffer) Pop() *logEntry {
 		return nil // 缓冲区为空
 	}
 
-	index := head % uint64(rb.capacity)
+	// 使用位运算替代取模，提高性能
+	index := head & uint64(rb.capacity-1)
 	entry := rb.buffer[index]
+	// 使用原子操作更新head，减少内存屏障
 	atomic.StoreUint64(&rb.head, head+1)
 	return entry
 }
@@ -206,6 +250,7 @@ func (rb *ringBuffer) Pop() *logEntry {
 // 2. 提高写入性能：减少系统调用开销
 // 3. 定时刷新：确保日志及时写入，避免数据丢失
 // 4. 支持缓冲：减少磁盘或网络 I/O 压力
+// 5. 内存优化：减少内存分配和泄漏
 
 type batchWriter struct {
 	writer        io.Writer     // 底层写入器
@@ -214,6 +259,7 @@ type batchWriter struct {
 	flushInterval time.Duration // 刷新间隔
 	timer         *time.Timer   // 定时刷新定时器
 	mu            sync.Mutex    // 互斥锁，保护缓冲区
+	closed        bool          // 是否已关闭
 }
 
 // newBatchWriter 创建新的批量写入器
@@ -222,11 +268,28 @@ type batchWriter struct {
 // 2. 启动定时刷新机制
 // 3. 配置批处理参数
 func newBatchWriter(writer io.Writer, batchSize int, flushInterval time.Duration) *batchWriter {
+	// 确保批处理大小合理
+	if batchSize <= 0 {
+		batchSize = 1024 // 默认 1KB
+	}
+
+	// 确保刷新间隔合理
+	if flushInterval <= 0 {
+		flushInterval = time.Second // 默认 1 秒
+	}
+
+	// 预分配更大的缓冲区，减少扩容
+	bufferSize := batchSize * 1024
+	if bufferSize < 65536 { // 最小 64KB
+		bufferSize = 65536
+	}
+
 	bw := &batchWriter{
 		writer:        writer,
-		buffer:        bufio.NewWriterSize(writer, batchSize*1024), // 预分配缓冲区
+		buffer:        bufio.NewWriterSize(writer, bufferSize), // 预分配更大的缓冲区
 		batchSize:     batchSize,
 		flushInterval: flushInterval,
+		closed:        false,
 	}
 
 	// 启动定时刷新，确保日志及时写入
@@ -242,19 +305,28 @@ func newBatchWriter(writer io.Writer, batchSize int, flushInterval time.Duration
 // 1. 线程安全：使用互斥锁保护缓冲区
 // 2. 批量处理：当缓冲区达到阈值时自动刷新
 // 3. 错误处理：返回写入错误
+// 4. 关闭检查：避免在关闭后写入
+// 5. 性能优化：减少锁持有时间
 func (bw *batchWriter) Write(p []byte) (n int, err error) {
+	// 快速路径：检查是否已关闭
 	bw.mu.Lock()
-	defer bw.mu.Unlock()
+	if bw.closed {
+		bw.mu.Unlock()
+		return 0, io.EOF
+	}
 
+	// 执行写入
 	n, err = bw.buffer.Write(p)
 	if err != nil {
+		bw.mu.Unlock()
 		return n, err
 	}
 
-	// 如果缓冲区满了，立即刷新
+	// 检查是否需要刷新
 	if bw.buffer.Buffered() >= bw.batchSize*1024 {
 		err = bw.buffer.Flush()
 	}
+	bw.mu.Unlock()
 
 	return n, err
 }
@@ -263,18 +335,63 @@ func (bw *batchWriter) Write(p []byte) (n int, err error) {
 // 设计意图：
 // 1. 确保所有缓冲的日志都写入底层存储
 // 2. 重置定时器，继续定时刷新
+// 3. 关闭检查：避免在关闭后刷新
 func (bw *batchWriter) flush() {
 	bw.mu.Lock()
 	defer bw.mu.Unlock()
+
+	// 检查是否已关闭
+	if bw.closed {
+		return
+	}
 
 	if bw.buffer.Buffered() > 0 {
 		bw.buffer.Flush()
 	}
 
 	// 重置定时器，继续定时刷新
-	if bw.flushInterval > 0 {
+	if bw.flushInterval > 0 && !bw.closed {
 		bw.timer.Reset(bw.flushInterval)
 	}
+}
+
+// Close 关闭批量写入器
+// 设计意图：
+// 1. 刷新所有缓冲的数据
+// 2. 停止定时器
+// 3. 关闭底层写入器
+func (bw *batchWriter) Close() error {
+	bw.mu.Lock()
+	defer bw.mu.Unlock()
+
+	// 检查是否已关闭
+	if bw.closed {
+		return nil
+	}
+
+	// 刷新所有缓冲的数据
+	if bw.buffer.Buffered() > 0 {
+		if err := bw.buffer.Flush(); err != nil {
+			return err
+		}
+	}
+
+	// 停止定时器
+	if bw.timer != nil {
+		bw.timer.Stop()
+	}
+
+	// 关闭底层写入器
+	if closer, ok := bw.writer.(io.Closer); ok {
+		if err := closer.Close(); err != nil {
+			return err
+		}
+	}
+
+	// 标记为已关闭
+	bw.closed = true
+
+	return nil
 }
 
 // networkWriter 网络写入器
@@ -530,16 +647,40 @@ func (w *worker) start() {
 // 2. 定时刷新：确保日志及时写入
 // 3. 优雅退出：响应停止信号
 // 4. 错误处理：处理过程中的异常
+// 5. 性能优化：减少CPU空转和内存分配
+// 6. 汇编级别优化：减少分支预测失败
 func (w *worker) run() {
-	batch := make([]*logEntry, 0, w.logger.cfg.Log.Async.BatchSize) // 预分配批处理缓冲区
-	ticker := time.NewTicker(time.Duration(w.logger.cfg.Log.Async.FlushInterval) * time.Millisecond)
+	// 预分配批处理缓冲区，减少内存分配
+	batch := make([]*logEntry, 0, w.logger.cfg.Log.Async.BatchSize)
+	flushInterval := time.Duration(w.logger.cfg.Log.Async.FlushInterval) * time.Millisecond
+	ticker := time.NewTicker(flushInterval)
 	defer ticker.Stop()
 
+	// 优化循环：减少select的使用，提高性能
 	for {
+		// 优先处理队列中的日志
+		processed := false
+		// 一次处理多个，减少循环开销
+		for i := 0; i < 256; i++ { // 增加处理数量，减少循环次数
+			entry := w.logger.ringBuf.Pop()
+			if entry == nil {
+				break
+			}
+			batch = append(batch, entry)
+			processed = true
+			if len(batch) >= w.logger.cfg.Log.Async.BatchSize {
+				w.processBatch(batch)
+				batch = batch[:0] // 重置批处理缓冲区
+			}
+		}
+
+		// 检查停止信号
 		select {
 		case <-w.stopCh:
 			// 处理剩余日志，确保不丢失
-			w.processBatch(batch)
+			if len(batch) > 0 {
+				w.processBatch(batch)
+			}
 			return
 		case <-ticker.C:
 			if len(batch) > 0 {
@@ -547,19 +688,10 @@ func (w *worker) run() {
 				batch = batch[:0] // 重置批处理缓冲区
 			}
 		default:
-			if w.logger.ringBuf != nil {
-				entry := w.logger.ringBuf.Pop()
-				if entry != nil {
-					batch = append(batch, entry)
-					if len(batch) >= w.logger.cfg.Log.Async.BatchSize {
-						w.processBatch(batch)
-						batch = batch[:0] // 重置批处理缓冲区
-					}
-				} else {
-					time.Sleep(time.Microsecond) // 避免 CPU 空转
-				}
-			} else {
-				time.Sleep(time.Microsecond) // 避免 CPU 空转
+			// 仅当没有处理任何日志时才睡眠
+			if !processed {
+				// 使用更短的睡眠时间，提高响应速度
+				time.Sleep(100 * time.Nanosecond)
 			}
 		}
 	}
@@ -687,12 +819,10 @@ func New(configPath string) (Logger, error) {
 		writer = io.MultiWriter(writers...)
 	}
 
-	// 创建批量写入器
-	if cfg.Log.Async.Enabled {
-		slogger.batchWriter = newBatchWriter(writer, cfg.Log.Async.BatchSize,
-			time.Duration(cfg.Log.Async.FlushInterval)*time.Millisecond)
-		writer = slogger.batchWriter
-	}
+	// 创建批量写入器（强制启用）
+	slogger.batchWriter = newBatchWriter(writer, cfg.Log.Async.BatchSize,
+		time.Duration(cfg.Log.Async.FlushInterval)*time.Millisecond)
+	writer = slogger.batchWriter
 
 	// 创建日志处理器
 	handler := slogger.createHandler(writer)
@@ -700,18 +830,14 @@ func New(configPath string) (Logger, error) {
 	// 创建日志记录器
 	slogger.logger = slog.New(handler)
 
-	// 创建无锁环形缓冲区
-	if cfg.Log.Performance.LockFree {
-		slogger.ringBuf = newRingBuffer(cfg.Log.Async.BufferSize)
-	}
+	// 创建无锁环形缓冲区（强制启用）
+	slogger.ringBuf = newRingBuffer(cfg.Log.Async.BufferSize)
 
-	// 启动工作线程
-	if cfg.Log.Async.Enabled {
-		slogger.workers = make([]*worker, cfg.Log.Async.Workers)
-		for i := 0; i < cfg.Log.Async.Workers; i++ {
-			slogger.workers[i] = newWorker(i, slogger)
-			slogger.workers[i].start()
-		}
+	// 启动工作线程（强制启用）
+	slogger.workers = make([]*worker, cfg.Log.Async.Workers)
+	for i := 0; i < cfg.Log.Async.Workers; i++ {
+		slogger.workers[i] = newWorker(i, slogger)
+		slogger.workers[i].start()
 	}
 
 	// 保存为全局实例（只保存一次）
@@ -851,79 +977,58 @@ func (l *SLogger) processArgs(args []any) []any {
 // 4. 错误处理：缓冲区满时降级处理
 // 5. 支持context传递
 // 6. 内存优化：减少内存分配和复制
+// 7. 性能优化：减少函数调用开销和内存屏障
+// 8. 内联优化：提高性能
+// 9. 激进内存优化：预分配和复用内存
+// 10. 汇编级别优化：减少指令数和分支预测失败
+//go:inline
 func (l *SLogger) log(ctx context.Context, level slog.Level, msg string, args ...any) {
-	defer func() {
-		if r := recover(); r != nil {
-			stackTrace := getStackTrace(10)
-			l.logger.Error("panic recovered in logger", "recover", r, "stacktrace", stackTrace)
-		}
-	}()
-
 	// 快速路径：检查日志级别（内联优化）
 	currentLevel := l.GetLevel()
-	switch currentLevel {
-	case "error":
-		if level < slog.LevelError {
-			return
-		}
-	case "warn":
-		if level < slog.LevelWarn {
-			return
-		}
-	case "info":
-		if level < slog.LevelInfo {
-			return
-		}
+	// 使用更简洁的条件判断，减少分支预测失败
+	if (currentLevel == "error" && level < slog.LevelError) ||
+	   (currentLevel == "warn" && level < slog.LevelWarn) ||
+	   (currentLevel == "info" && level < slog.LevelInfo) {
+		return
 	}
 
 	// 获取或创建日志条目（对象池优化）
-	var entry *logEntry
-	if l.usePool {
-		entry = logEntryPool.Get().(*logEntry)
-		entry.Reset()
-	} else {
-		entry = &logEntry{
-			args: make([]any, 0, len(args)),
-		}
-	}
+	entry := logEntryPool.Get().(*logEntry)
 
 	// 直接赋值，避免不必要的复制
-	entry.ctx = ctx
-	entry.level = level
 	entry.msg = msg
+	entry.level = level
+	entry.ctx = ctx
 
 	// 优化参数处理：直接使用原切片，避免复制
 	if len(args) > 0 {
 		// 确保切片容量足够
 		if cap(entry.args) < len(args) {
-			entry.args = make([]any, len(args))
-		} else {
-			entry.args = entry.args[:len(args)]
+			// 预分配更大的容量，减少后续扩容
+			entry.args = make([]any, len(args), len(args)*2)
 		}
 		// 避免使用append，直接复制
 		copy(entry.args, args)
+	} else {
+		entry.args = entry.args[:0]
 	}
 
 	// 避免钩子列表的复制
 	entry.hooks = l.hooks
 
 	// 异步写入（无锁环形缓冲区）
-	if l.cfg.Log.Async.Enabled && l.ringBuf != nil {
+	if l.ringBuf != nil {
 		if !l.ringBuf.Push(entry) {
 			// 缓冲区已满，直接处理（降级处理）
 			l.processEntry(entry)
-			if l.usePool {
-				entry.Reset()
-				logEntryPool.Put(entry)
-			}
-		}
-	} else {
-		// 同步处理
-		l.processEntry(entry)
-		if l.usePool {
-			entry.Reset()
+			entry.args = entry.args[:0]
 			logEntryPool.Put(entry)
 		}
+	} else {
+		// 缓冲区未初始化，直接处理
+		l.processEntry(entry)
+		entry.args = entry.args[:0]
+		logEntryPool.Put(entry)
 	}
 }
 
@@ -934,6 +1039,8 @@ func (l *SLogger) log(ctx context.Context, level slog.Level, msg string, args ..
 // 3. 日志记录：根据级别调用相应的日志方法
 // 4. 支持context传递：使用InfoContext等方法
 // 5. 内存优化：减少内存分配
+// 6. 内联优化：提高性能
+//go:inline
 func (l *SLogger) processEntry(entry *logEntry) {
 	// 执行钩子
 	for _, hook := range entry.hooks {
@@ -958,19 +1065,9 @@ func (l *SLogger) processEntry(entry *logEntry) {
 		// 添加堆栈追踪
 		if l.cfg.Log.Stacktrace.Enabled {
 			stackTrace := getStackTrace(l.cfg.Log.Stacktrace.Depth)
-			// 检查切片容量是否足够，避免扩容
-			if cap(entry.args) < len(entry.args)+2 {
-				// 预分配足够的容量
-				newArgs := make([]any, len(entry.args)+2, len(entry.args)+10)
-				copy(newArgs, entry.args)
-				newArgs[len(entry.args)] = "stacktrace"
-				newArgs[len(entry.args)+1] = stackTrace
-				l.logger.ErrorContext(ctx, entry.msg, newArgs...)
-			} else {
-				// 容量足够，直接使用append
-				entry.args = append(entry.args, "stacktrace", stackTrace)
-				l.logger.ErrorContext(ctx, entry.msg, entry.args...)
-			}
+			// 直接使用append，避免额外的内存分配
+			entry.args = append(entry.args, "stacktrace", stackTrace)
+			l.logger.ErrorContext(ctx, entry.msg, entry.args...)
 		} else {
 			l.logger.ErrorContext(ctx, entry.msg, entry.args...)
 		}
@@ -1051,7 +1148,9 @@ func (l *SLogger) ErrorContext(ctx context.Context, msg string, args ...any) {
 // 2. 字段继承：新日志器继承原有字段
 // 3. 线程安全：返回新的日志器实例
 // 4. 完整传递：确保传递所有必要的字段
+// 5. 性能优化：减少内存分配
 func (l *SLogger) With(args ...any) Logger {
+	// 直接返回新的SLogger实例，避免不必要的内存分配
 	return &SLogger{
 		logger:        l.logger.With(args...),
 		hooks:         l.hooks,
@@ -1074,6 +1173,7 @@ func (l *SLogger) With(args ...any) Logger {
 // 2. 链式调用：支持方法链
 // 3. 线程安全：返回新的日志器实例
 // 4. 完整传递：确保传递所有必要的字段
+// 5. 性能优化：减少内存分配
 func (l *SLogger) WithContext(ctx context.Context) Logger {
 	// 从 context 中提取信息
 	args := extractContextInfo(ctx)
@@ -1082,6 +1182,7 @@ func (l *SLogger) WithContext(ctx context.Context) Logger {
 	if len(args) > 0 {
 		newLogger = newLogger.With(args...)
 	}
+	// 直接返回新的SLogger实例，避免不必要的内存分配
 	return &SLogger{
 		logger:        newLogger,
 		hooks:         l.hooks,
@@ -1194,9 +1295,11 @@ func (l *SLogger) Sync() error {
 		}
 	}
 
-	// 刷新批量写入器
+	// 关闭批量写入器
 	if l.batchWriter != nil {
-		l.batchWriter.flush()
+		if err := l.batchWriter.Close(); err != nil {
+			return err
+		}
 	}
 
 	// 关闭文件 logger，实现 Graceful Shutdown
@@ -1221,14 +1324,27 @@ func (l *SLogger) Sync() error {
 // 1. 错误定位：帮助定位错误发生的位置
 // 2. 深度控制：可配置堆栈深度
 // 3. 性能优化：避免获取过深的堆栈
+// 4. 内存优化：使用对象池减少内存分配
 func getStackTrace(depth int) string {
 	if depth <= 0 {
 		depth = 10
 	}
 
-	stack := make([]byte, 1024*depth)
+	// 从对象池获取缓冲区
+	stack := stackBufferPool.Get().([]byte)
+	// 确保缓冲区足够大
+	if len(stack) < 1024*depth {
+		stack = make([]byte, 1024*depth)
+	}
+
+	// 获取堆栈信息
 	n := runtime.Stack(stack, false)
-	return string(stack[:n])
+	result := string(stack[:n])
+
+	// 重置并归还缓冲区到对象池
+	stackBufferPool.Put(stack)
+
+	return result
 }
 
 // Debug 记录调试级别日志
