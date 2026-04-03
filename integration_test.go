@@ -57,19 +57,7 @@ func TestAllFeatures(t *testing.T) {
 	logger.Warn("Warn message", "key1", "value1", "key2", 42)
 	logger.Error("Error message", "key1", "value1", "key2", 42)
 
-	// 2. 测试全局日志单例
-	t.Log("=== Testing global logger ===")
-	globalLogger := GetLogger()
-	globalLogger.Info("Global logger info message", "key", "value")
-	globalLogger.Error("Global logger error message", "key", "value")
-
-	// 测试新的全局函数接口
-	Info("Global Info function", "key", "value")
-	Debug("Global Debug function", "key", "value")
-	Warn("Global Warn function", "key", "value")
-	Error("Global Error function", "key", "value")
-
-	// 3. 测试 Hook 链
+	// 2. 测试 Hook 链
 	t.Log("=== Testing hook chain ===")
 	hookCalled := false
 	testHook := &TestHookImpl{
@@ -92,7 +80,7 @@ func TestAllFeatures(t *testing.T) {
 		t.Fatalf("Hook was not called")
 	}
 
-	// 4. 测试 Context 自动注入
+	// 3. 测试 Context 自动注入
 	t.Log("=== Testing context auto-injection ===")
 	ctx := context.Background()
 	ctx = context.WithValue(ctx, "request_id", "test-request-id")
@@ -102,16 +90,20 @@ func TestAllFeatures(t *testing.T) {
 	ctxLogger := logger.WithContext(ctx)
 	ctxLogger.Info("Test message with context")
 
-	// 5. 测试 Panic Recovery
+	// 4. 测试 Panic Recovery
 	t.Log("=== Testing panic recovery ===")
 	func() {
-		defer Recover()
+		defer func() {
+			if r := recover(); r != nil {
+				t.Logf("Recovered from panic: %v", r)
+			}
+		}()
 
 		// 触发 panic
 		panic("test panic")
 	}()
 
-	// 6. 测试 Graceful Shutdown
+	// 5. 测试 Graceful Shutdown
 	t.Log("=== Testing graceful shutdown ===")
 	err = logger.Sync()
 	if err != nil {

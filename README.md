@@ -30,6 +30,8 @@ go get github.com/streasure/treasure-slog
 
 #### 1.1 使用全局日志单例
 
+> 注意：GetLogger() 函数已被删除，建议使用全局函数接口
+
 ```go
 package main
 
@@ -38,17 +40,15 @@ import (
 )
 
 func main() {
-    // 使用全局日志单例（从命令行参数 --config 获取配置文件路径）
-    log := logger.GetLogger()
-    
-    // 基础日志
-    log.Info("应用启动", "version", "1.0.0", "env", "production")
-    log.Debug("调试信息", "detail", "some debug data")
-    log.Warn("警告信息", "threshold", 80)
-    log.Error("错误信息", "error", "connection failed")
+    // 直接使用全局函数，无需获取 logger 实例
+    // 配置文件路径通过命令行参数 --config 指定
+    logger.Info("应用启动", "version", "1.0.0", "env", "production")
+    logger.Debug("调试信息", "detail", "some debug data")
+    logger.Warn("警告信息", "threshold", 80)
+    logger.Error("错误信息", "error", "connection failed")
     
     // 同步日志（应用退出前调用）
-    defer log.Sync()
+    defer logger.Sync()
 }
 ```
 
@@ -136,6 +136,8 @@ userLog.Info("用户操作", "action", "buy")
 
 #### 4.1 使用实例方法
 
+> 注意：GetLogger() 函数已被删除，建议使用全局函数接口
+
 ```go
 package main
 
@@ -145,16 +147,14 @@ import (
 )
 
 func main() {
-    log := logger.GetLogger()
-    
     // 创建带追踪信息的 context
     ctx := context.Background()
     ctx = context.WithValue(ctx, "request_id", "req-abc-123")
     ctx = context.WithValue(ctx, "user_id", "user-456")
     ctx = context.WithValue(ctx, "trace_id", "trace-xyz-789")
     
-    // 创建带 context 的 logger
-    ctxLog := log.WithContext(ctx)
+    // 使用全局 WithContext 函数
+    ctxLog := logger.WithContext(ctx)
     ctxLog.Info("处理请求")
     
     // 输出自动包含 context 信息：
@@ -189,6 +189,8 @@ func main() {
 
 #### 5.1 使用实例方法
 
+> 注意：GetLogger() 函数已被删除，建议使用全局函数接口
+
 ```go
 package main
 
@@ -208,11 +210,9 @@ func (h *MetricsHook) Run(msg string, level string, args ...any) {
 }
 
 func main() {
-    log := logger.GetLogger()
-    
-    // 添加 Hook
+    // 使用全局 AddHook 函数
     metricsHook := &MetricsHook{counter: make(map[string]int)}
-    hookedLog := log.AddHook(metricsHook)
+    hookedLog := logger.AddHook(metricsHook)
     
     hookedLog.Info("测试消息")
     hookedLog.Error("错误消息")
@@ -253,6 +253,8 @@ func main() {
 
 #### 6.1 使用实例方法
 
+> 注意：GetLogger() 函数已被删除，建议使用全局函数接口
+
 ```go
 package main
 
@@ -261,18 +263,16 @@ import (
 )
 
 func main() {
-    log := logger.GetLogger()
-    
     // 初始级别为 info
-    log.Info("这条会显示")
-    log.Debug("这条不会显示")
+    logger.Info("这条会显示")
+    logger.Debug("这条不会显示")
     
     // 动态调整为 debug 级别
-    log.SetLevel("debug")
-    log.Debug("现在这条会显示了")
+    logger.SetLevel("debug")
+    logger.Debug("现在这条会显示了")
     
     // 查看当前级别
-    fmt.Println("当前级别:", log.GetLevel())
+    fmt.Println("当前级别:", logger.GetLevel())
 }
 ```
 

@@ -10,41 +10,38 @@ import (
 func main() {
 	fmt.Println("=== Treasure-Slog 示例程序 ===")
 
-	// 获取全局日志单例
-	log := logger.GetLogger()
-
 	// 基础日志记录
 	fmt.Println("1. 基础日志记录")
-	log.Info("应用启动", "version", "1.0.0", "env", "development")
-	log.Debug("调试信息", "module", "main", "status", "initialized")
-	log.Warn("警告信息", "threshold", 90, "action", "monitor")
-	log.Error("错误信息", "error", "database connection failed", "retry", true)
+	logger.Info("应用启动", "version", "1.0.0", "env", "development")
+	logger.Debug("调试信息", "module", "main", "status", "initialized")
+	logger.Warn("警告信息", "threshold", 90, "action", "monitor")
+	logger.Error("错误信息", "error", "database connection failed", "retry", true)
 	fmt.Println()
 
 	// 带固定字段的日志
 	fmt.Println("2. 带固定字段的日志")
-	userLog := log.With("user_id", "12345", "role", "admin")
+	userLog := logger.With("user_id", "12345", "role", "admin")
 	userLog.Info("用户登录", "ip", "192.168.1.1", "browser", "Chrome")
 	userLog.Info("用户操作", "action", "create", "resource", "user")
 	fmt.Println()
 
 	// 动态调整日志级别
 	fmt.Println("3. 动态调整日志级别")
-	fmt.Printf("当前日志级别: %s\n", log.GetLevel())
-	log.Debug("这条 debug 日志不会显示")
+	fmt.Printf("当前日志级别: %s\n", logger.GetLevel())
+	logger.Debug("这条 debug 日志不会显示")
 
-	log.SetLevel("debug")
-	fmt.Printf("调整后级别: %s\n", log.GetLevel())
-	log.Debug("现在这条 debug 日志会显示")
+	logger.SetLevel("debug")
+	fmt.Printf("调整后级别: %s\n", logger.GetLevel())
+	logger.Debug("现在这条 debug 日志会显示")
 
-	log.SetLevel("info") // 恢复默认级别
+	logger.SetLevel("info") // 恢复默认级别
 	fmt.Println()
 
 	// 测试性能
 	fmt.Println("4. 性能测试")
 	start := time.Now()
 	for i := 0; i < 10000; i++ {
-		log.Info("性能测试", "iteration", i, "timestamp", time.Now().UnixNano())
+		logger.Info("性能测试", "iteration", i, "timestamp", time.Now().UnixNano())
 	}
 	elapsed := time.Since(start)
 	fmt.Printf("10000 条日志耗时: %v\n", elapsed)
@@ -61,7 +58,7 @@ func main() {
 	time.Sleep(500 * time.Millisecond)
 
 	// 同步日志（应用退出前必须调用）
-	log.Sync()
+	logger.Sync()
 
 	fmt.Println("=== 示例结束 ===")
 }

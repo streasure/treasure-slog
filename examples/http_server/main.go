@@ -12,9 +12,8 @@ import (
 func main() {
 	fmt.Println("=== Treasure-Slog HTTP 服务器示例 ===")
 
-	// 获取日志实例
-	log := logger.GetLogger()
-	defer log.Sync()
+	// 直接使用全局函数
+	defer logger.Sync()
 
 	// 注册路由
 	http.HandleFunc("/", handleRoot)
@@ -28,7 +27,7 @@ func main() {
 
 	// 启动 HTTP 服务器
 	if err := http.ListenAndServe(addr, nil); err != nil && err != http.ErrServerClosed {
-		log.Error("服务器启动失败", "error", err)
+		logger.Error("服务器启动失败", "error", err)
 	}
 
 	fmt.Println("服务器已停止")
@@ -36,13 +35,11 @@ func main() {
 
 // handleRoot 处理根路径请求
 func handleRoot(w http.ResponseWriter, r *http.Request) {
-	log := logger.GetLogger()
-
 	// 创建带上下文的日志记录器
 	ctx := r.Context()
 	ctx = context.WithValue(ctx, "request_id", generateRequestID())
 	ctx = context.WithValue(ctx, "client_ip", r.RemoteAddr)
-	ctxLog := log.WithContext(ctx)
+	ctxLog := logger.WithContext(ctx)
 
 	// 记录请求
 	ctxLog.Info("HTTP 请求",
@@ -70,12 +67,10 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
 
 // handleAPI 处理 API 请求
 func handleAPI(w http.ResponseWriter, r *http.Request) {
-	log := logger.GetLogger()
-
 	// 创建带上下文的日志记录器
 	ctx := r.Context()
 	ctx = context.WithValue(ctx, "request_id", generateRequestID())
-	ctxLog := log.WithContext(ctx)
+	ctxLog := logger.WithContext(ctx)
 
 	// 记录请求
 	ctxLog.Info("API 请求",
@@ -105,12 +100,10 @@ func handleAPI(w http.ResponseWriter, r *http.Request) {
 
 // handleError 处理错误请求
 func handleError(w http.ResponseWriter, r *http.Request) {
-	log := logger.GetLogger()
-
 	// 创建带上下文的日志记录器
 	ctx := r.Context()
 	ctx = context.WithValue(ctx, "request_id", generateRequestID())
-	ctxLog := log.WithContext(ctx)
+	ctxLog := logger.WithContext(ctx)
 
 	// 记录请求
 	ctxLog.Info("错误请求",

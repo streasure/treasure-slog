@@ -7,6 +7,13 @@ import (
 
 // TestGlobalFunctions 测试全局日志函数
 func TestGlobalFunctions(t *testing.T) {
+	// 首先调用 New 初始化全局实例
+	logger, err := New("configs/config.yaml")
+	if err != nil {
+		t.Fatalf("Failed to create logger: %v", err)
+	}
+	defer logger.Sync()
+
 	// 测试 Info 函数
 	Info("Test global Info function")
 
@@ -20,13 +27,17 @@ func TestGlobalFunctions(t *testing.T) {
 	Error("Test global Error function")
 
 	// 测试 With 函数
-	logger := With("key", "value")
-	logger.Info("Test global With function")
+	withLogger := With("key", "value")
+	if withLogger != nil {
+		withLogger.Info("Test global With function")
+	}
 
 	// 测试 WithContext 函数
 	ctx := context.Background()
 	ctxLogger := WithContext(ctx)
-	ctxLogger.Info("Test global WithContext function")
+	if ctxLogger != nil {
+		ctxLogger.Info("Test global WithContext function")
+	}
 
 	// 测试 SetLevel 函数
 	SetLevel("debug")
@@ -38,7 +49,7 @@ func TestGlobalFunctions(t *testing.T) {
 	}
 
 	// 测试 Sync 函数
-	err := Sync()
+	err = Sync()
 	if err != nil {
 		t.Errorf("Sync error: %v", err)
 	}

@@ -11,7 +11,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"flag"
 	"fmt"
 	"io"
 	"log/slog"
@@ -51,16 +50,25 @@ type Hook interface {
 // 1. 提供与 zap 兼容的 API，方便用户迁移
 // 2. 封装底层实现细节，提供统一的日志接口
 // 3. 支持链式调用和方法扩展
+// 4. 支持context传递，用于分布式追踪
 
 type Logger interface {
 	// Debug 记录调试级别日志
 	Debug(msg string, args ...any)
+	// DebugContext 记录调试级别日志（带context）
+	DebugContext(ctx context.Context, msg string, args ...any)
 	// Info 记录信息级别日志
 	Info(msg string, args ...any)
+	// InfoContext 记录信息级别日志（带context）
+	InfoContext(ctx context.Context, msg string, args ...any)
 	// Warn 记录警告级别日志
 	Warn(msg string, args ...any)
+	// WarnContext 记录警告级别日志（带context）
+	WarnContext(ctx context.Context, msg string, args ...any)
 	// Error 记录错误级别日志
 	Error(msg string, args ...any)
+	// ErrorContext 记录错误级别日志（带context）
+	ErrorContext(ctx context.Context, msg string, args ...any)
 	// With 添加键值对到日志记录器（链式调用）
 	With(args ...any) Logger
 	// WithContext 添加上下文到日志记录器
@@ -538,12 +546,16 @@ func (w *worker) run() {
 				batch = batch[:0] // 重置批处理缓冲区
 			}
 		default:
-			entry := w.logger.ringBuf.Pop()
-			if entry != nil {
-				batch = append(batch, entry)
-				if len(batch) >= w.logger.cfg.Log.Async.BatchSize {
-					w.processBatch(batch)
-					batch = batch[:0] // 重置批处理缓冲区
+			if w.logger.ringBuf != nil {
+				entry := w.logger.ringBuf.Pop()
+				if entry != nil {
+					batch = append(batch, entry)
+					if len(batch) >= w.logger.cfg.Log.Async.BatchSize {
+						w.processBatch(batch)
+						batch = batch[:0] // 重置批处理缓冲区
+					}
+				} else {
+					time.Sleep(time.Microsecond) // 避免 CPU 空转
 				}
 			} else {
 				time.Sleep(time.Microsecond) // 避免 CPU 空转
@@ -585,34 +597,27 @@ func (w *worker) stop() {
 // 全局日志单例
 // 设计意图：
 // 1. 全局访问：方便在应用各处使用
-// 2. 延迟初始化：首次使用时创建
-// 3. 线程安全：使用 sync.Once 确保只初始化一次
+// 2. 延迟初始化：首次调用New时创建
+// 3. 线程安全：使用sync.Once确保只初始化一次
 var (
 	globalLogger Logger
 	once         sync.Once
 )
 
-// New 创建一个新的日志记录器
+// New 创建一个新的日志记录器，并将其设置为全局日志实例
 // 设计意图：
 // 1. 从配置文件加载配置
-// 2. 初始化日志器
-// 3. 返回统一的 Logger 接口
+// 2. 初始化所有组件
+// 3. 配置多输出
+// 4. 启动工作线程
+// 5. 配置性能优化选项
+// 6. 保存为全局实例，供全局函数使用
 func New(configPath string) (Logger, error) {
 	cfg, err := config.LoadConfig(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("load config error: %w", err)
 	}
 
-	return newLogger(cfg)
-}
-
-// newLogger 创建日志记录器
-// 设计意图：
-// 1. 初始化所有组件
-// 2. 配置多输出
-// 3. 启动工作线程
-// 4. 配置性能优化选项
-func newLogger(cfg *config.Config) (Logger, error) {
 	// 确保日志目录存在
 	if cfg.Log.File.Enabled {
 		logDir := filepath.Dir(cfg.Log.File.Path)
@@ -708,6 +713,11 @@ func newLogger(cfg *config.Config) (Logger, error) {
 		}
 	}
 
+	// 保存为全局实例（只保存一次）
+	once.Do(func() {
+		globalLogger = slogger
+	})
+
 	return slogger, nil
 }
 
@@ -767,100 +777,6 @@ func (l *SLogger) createHandler(writer io.Writer) slog.Handler {
 	}
 
 	return handler
-}
-
-// GetLogger 获取全局日志单例
-// 设计意图：
-// 1. 全局访问点：方便在应用各处使用
-// 2. 延迟初始化：首次使用时创建
-// 3. 从命令行参数获取配置文件路径
-// 4. 无默认配置，必须提供配置文件
-func GetLogger() Logger {
-	once.Do(func() {
-		var err error
-		var configPath string
-
-		// 从命令行参数获取配置文件路径
-		flag.Parse()
-		configPath = *configFlag
-
-		if configPath == "" {
-			// 检查是否在测试环境中
-			if isTest() {
-				// 在测试环境中使用默认配置
-				defaultConfig := &config.Config{
-					Log: config.LogConfig{
-						Level:  "info",
-						Format: "json",
-						Async: config.AsyncConfig{
-							Enabled:       true,
-							BufferSize:    10000,
-							BatchSize:     100,
-							FlushInterval: 100,
-							Workers:       4,
-						},
-						Console: config.ConsoleConfig{
-							Enabled: true,
-							Format:  "text",
-						},
-						File: config.FileConfig{
-							Enabled: false,
-						},
-						Stacktrace: config.StackConfig{
-							Enabled: true,
-							Level:   "error",
-							Depth:   10,
-						},
-						Sampling: config.SamplingConfig{
-							Enabled:    false,
-							Initial:    1000,
-							Thereafter: 100,
-						},
-						Performance: config.PerformanceConfig{
-							LockFree: true,
-							UsePool:  true,
-							Prealloc: true,
-						},
-					},
-				}
-				globalLogger, _ = newLogger(defaultConfig)
-				return
-			}
-			panic("配置文件路径未提供，请使用 --config 参数指定")
-		}
-
-		globalLogger, err = New(configPath)
-		if err != nil {
-			panic(fmt.Sprintf("加载配置文件失败: %v", err))
-		}
-	})
-	return globalLogger
-}
-
-// 命令行参数
-var configFlag = flag.String("config", "", "配置文件路径")
-
-// isTest 检查是否在测试环境中
-func isTest() bool {
-	// 检查是否设置了测试相关的环境变量
-	if os.Getenv("GO_TESTING") == "1" {
-		return true
-	}
-
-	// 检查命令行参数
-	for _, arg := range os.Args {
-		if len(arg) > 5 && arg[:5] == "-test" {
-			return true
-		}
-	}
-
-	// 检查进程名称是否包含"test"
-	procName := os.Args[0]
-	if len(procName) > 4 && procName[len(procName)-4:] == ".test" {
-		return true
-	}
-
-	return false
 }
 
 // getCachedField 获取缓存的字段
@@ -932,7 +848,8 @@ func (l *SLogger) processArgs(args []any) []any {
 // 2. 对象复用：使用对象池减少内存分配
 // 3. 异步处理：使用无锁环形缓冲区
 // 4. 错误处理：缓冲区满时降级处理
-func (l *SLogger) log(level slog.Level, msg string, args ...any) {
+// 5. 支持context传递
+func (l *SLogger) log(ctx context.Context, level slog.Level, msg string, args ...any) {
 	defer func() {
 		if r := recover(); r != nil {
 			stackTrace := getStackTrace(10)
@@ -968,6 +885,7 @@ func (l *SLogger) log(level slog.Level, msg string, args ...any) {
 		}
 	}
 
+	entry.ctx = ctx
 	entry.level = level
 	entry.msg = msg
 	entry.args = append(entry.args, args...)
@@ -998,27 +916,34 @@ func (l *SLogger) log(level slog.Level, msg string, args ...any) {
 // 1. 执行钩子：处理所有注册的钩子
 // 2. 堆栈追踪：错误级别自动添加堆栈信息
 // 3. 日志记录：根据级别调用相应的日志方法
+// 4. 支持context传递：使用InfoContext等方法
 func (l *SLogger) processEntry(entry *logEntry) {
 	// 执行钩子
 	for _, hook := range entry.hooks {
 		hook.Run(entry.msg, entry.level.String(), entry.args...)
 	}
 
-	// 记录日志
+	// 如果没有context，使用context.Background()
+	ctx := entry.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	// 记录日志，使用支持context的方法
 	switch entry.level {
 	case slog.LevelDebug:
-		l.logger.Debug(entry.msg, entry.args...)
+		l.logger.DebugContext(ctx, entry.msg, entry.args...)
 	case slog.LevelInfo:
-		l.logger.Info(entry.msg, entry.args...)
+		l.logger.InfoContext(ctx, entry.msg, entry.args...)
 	case slog.LevelWarn:
-		l.logger.Warn(entry.msg, entry.args...)
+		l.logger.WarnContext(ctx, entry.msg, entry.args...)
 	case slog.LevelError:
 		// 添加堆栈追踪
 		if l.cfg.Log.Stacktrace.Enabled {
 			stackTrace := getStackTrace(l.cfg.Log.Stacktrace.Depth)
 			entry.args = append(entry.args, "stacktrace", stackTrace)
 		}
-		l.logger.Error(entry.msg, entry.args...)
+		l.logger.ErrorContext(ctx, entry.msg, entry.args...)
 	}
 }
 
@@ -1026,32 +951,68 @@ func (l *SLogger) processEntry(entry *logEntry) {
 // 设计意图：
 // 1. 提供统一的调试日志接口
 // 2. 调用通用 log 方法处理
+// 3. 支持context传递
 func (l *SLogger) Debug(msg string, args ...any) {
-	l.log(slog.LevelDebug, msg, args...)
+	l.log(context.Background(), slog.LevelDebug, msg, args...)
+}
+
+// DebugContext 记录调试级别日志（带context）
+// 设计意图：
+// 1. 提供统一的调试日志接口
+// 2. 支持context传递，用于追踪和取消
+func (l *SLogger) DebugContext(ctx context.Context, msg string, args ...any) {
+	l.log(ctx, slog.LevelDebug, msg, args...)
 }
 
 // Info 记录信息级别日志
 // 设计意图：
 // 1. 提供统一的信息日志接口
 // 2. 调用通用 log 方法处理
+// 3. 支持context传递
 func (l *SLogger) Info(msg string, args ...any) {
-	l.log(slog.LevelInfo, msg, args...)
+	l.log(context.Background(), slog.LevelInfo, msg, args...)
+}
+
+// InfoContext 记录信息级别日志（带context）
+// 设计意图：
+// 1. 提供统一的信息日志接口
+// 2. 支持context传递，用于追踪和取消
+func (l *SLogger) InfoContext(ctx context.Context, msg string, args ...any) {
+	l.log(ctx, slog.LevelInfo, msg, args...)
 }
 
 // Warn 记录警告级别日志
 // 设计意图：
 // 1. 提供统一的警告日志接口
 // 2. 调用通用 log 方法处理
+// 3. 支持context传递
 func (l *SLogger) Warn(msg string, args ...any) {
-	l.log(slog.LevelWarn, msg, args...)
+	l.log(context.Background(), slog.LevelWarn, msg, args...)
+}
+
+// WarnContext 记录警告级别日志（带context）
+// 设计意图：
+// 1. 提供统一的警告日志接口
+// 2. 支持context传递，用于追踪和取消
+func (l *SLogger) WarnContext(ctx context.Context, msg string, args ...any) {
+	l.log(ctx, slog.LevelWarn, msg, args...)
 }
 
 // Error 记录错误级别日志
 // 设计意图：
 // 1. 提供统一的错误日志接口
 // 2. 调用通用 log 方法处理
+// 3. 支持context传递
 func (l *SLogger) Error(msg string, args ...any) {
-	l.log(slog.LevelError, msg, args...)
+	l.log(context.Background(), slog.LevelError, msg, args...)
+}
+
+// ErrorContext 记录错误级别日志（带context）
+// 设计意图：
+// 1. 提供统一的错误日志接口
+// 2. 支持context传递，用于追踪和取消
+func (l *SLogger) ErrorContext(ctx context.Context, msg string, args ...any) {
+	l.log(ctx, slog.LevelError, msg, args...)
 }
 
 // With 添加键值对到日志记录器
@@ -1220,96 +1181,178 @@ func getStackTrace(depth int) string {
 	return string(stack[:n])
 }
 
-// Recover 恢复 panic 并记录日志
-// 设计意图：
-// 1. 程序保护：防止 panic 导致程序崩溃
-// 2. 错误记录：自动记录 panic 信息和堆栈
-// 3. 简单使用：只需在 defer 中调用
-func Recover() {
-	if r := recover(); r != nil {
-		stackTrace := getStackTrace(10)
-		GetLogger().Error("panic recovered", "recover", r, "stacktrace", stackTrace)
-	}
-}
-
 // Debug 记录调试级别日志
 // 设计意图：
 // 1. 提供便捷的全局日志接口
 // 2. 直接调用全局日志实例的 Debug 方法
+// 3. 需要先调用 New 初始化全局实例
 func Debug(msg string, args ...any) {
-	GetLogger().Debug(msg, args...)
+	if globalLogger != nil {
+		globalLogger.Debug(msg, args...)
+	}
+}
+
+// DebugContext 记录调试级别日志（带context）
+// 设计意图：
+// 1. 提供便捷的全局日志接口
+// 2. 支持context传递，用于分布式追踪
+// 3. 需要先调用 New 初始化全局实例
+func DebugContext(ctx context.Context, msg string, args ...any) {
+	if globalLogger != nil {
+		globalLogger.DebugContext(ctx, msg, args...)
+	}
 }
 
 // Info 记录信息级别日志
 // 设计意图：
 // 1. 提供便捷的全局日志接口
 // 2. 直接调用全局日志实例的 Info 方法
+// 3. 需要先调用 New 初始化全局实例
 func Info(msg string, args ...any) {
-	GetLogger().Info(msg, args...)
+	if globalLogger != nil {
+		globalLogger.Info(msg, args...)
+	}
+}
+
+// InfoContext 记录信息级别日志（带context）
+// 设计意图：
+// 1. 提供便捷的全局日志接口
+// 2. 支持context传递，用于分布式追踪
+// 3. 需要先调用 New 初始化全局实例
+func InfoContext(ctx context.Context, msg string, args ...any) {
+	if globalLogger != nil {
+		globalLogger.InfoContext(ctx, msg, args...)
+	}
 }
 
 // Warn 记录警告级别日志
 // 设计意图：
 // 1. 提供便捷的全局日志接口
 // 2. 直接调用全局日志实例的 Warn 方法
+// 3. 需要先调用 New 初始化全局实例
 func Warn(msg string, args ...any) {
-	GetLogger().Warn(msg, args...)
+	if globalLogger != nil {
+		globalLogger.Warn(msg, args...)
+	}
+}
+
+// WarnContext 记录警告级别日志（带context）
+// 设计意图：
+// 1. 提供便捷的全局日志接口
+// 2. 支持context传递，用于分布式追踪
+// 3. 需要先调用 New 初始化全局实例
+func WarnContext(ctx context.Context, msg string, args ...any) {
+	if globalLogger != nil {
+		globalLogger.WarnContext(ctx, msg, args...)
+	}
 }
 
 // Error 记录错误级别日志
 // 设计意图：
 // 1. 提供便捷的全局日志接口
 // 2. 直接调用全局日志实例的 Error 方法
+// 3. 需要先调用 New 初始化全局实例
 func Error(msg string, args ...any) {
-	GetLogger().Error(msg, args...)
+	if globalLogger != nil {
+		globalLogger.Error(msg, args...)
+	}
+}
+
+// ErrorContext 记录错误级别日志（带context）
+// 设计意图：
+// 1. 提供便捷的全局日志接口
+// 2. 支持context传递，用于分布式追踪
+// 3. 需要先调用 New 初始化全局实例
+func ErrorContext(ctx context.Context, msg string, args ...any) {
+	if globalLogger != nil {
+		globalLogger.ErrorContext(ctx, msg, args...)
+	}
 }
 
 // With 添加键值对到日志记录器
 // 设计意图：
 // 1. 提供便捷的全局日志接口
 // 2. 直接调用全局日志实例的 With 方法
+// 3. 需要先调用 New 初始化全局实例
 func With(args ...any) Logger {
-	return GetLogger().With(args...)
+	if globalLogger != nil {
+		return globalLogger.With(args...)
+	}
+	return nil
 }
 
 // WithContext 添加上下文到日志记录器
 // 设计意图：
 // 1. 提供便捷的全局日志接口
 // 2. 直接调用全局日志实例的 WithContext 方法
+// 3. 需要先调用 New 初始化全局实例
 func WithContext(ctx context.Context) Logger {
-	return GetLogger().WithContext(ctx)
+	if globalLogger != nil {
+		return globalLogger.WithContext(ctx)
+	}
+	return nil
 }
 
 // AddHook 添加钩子到日志记录器
 // 设计意图：
 // 1. 提供便捷的全局日志接口
 // 2. 直接调用全局日志实例的 AddHook 方法
+// 3. 需要先调用 New 初始化全局实例
 func AddHook(hook Hook) Logger {
-	return GetLogger().AddHook(hook)
+	if globalLogger != nil {
+		return globalLogger.AddHook(hook)
+	}
+	return nil
 }
 
 // Sync 同步日志，实现 Graceful Shutdown
 // 设计意图：
 // 1. 提供便捷的全局日志接口
 // 2. 直接调用全局日志实例的 Sync 方法
+// 3. 需要先调用 New 初始化全局实例
 func Sync() error {
-	return GetLogger().Sync()
+	if globalLogger != nil {
+		return globalLogger.Sync()
+	}
+	return nil
 }
 
 // SetLevel 动态设置日志级别
 // 设计意图：
 // 1. 提供便捷的全局日志接口
 // 2. 直接调用全局日志实例的 SetLevel 方法
+// 3. 需要先调用 New 初始化全局实例
 func SetLevel(level string) {
-	GetLogger().SetLevel(level)
+	if globalLogger != nil {
+		globalLogger.SetLevel(level)
+	}
 }
 
 // GetLevel 获取当前日志级别
 // 设计意图：
 // 1. 提供便捷的全局日志接口
 // 2. 直接调用全局日志实例的 GetLevel 方法
+// 3. 需要先调用 New 初始化全局实例
 func GetLevel() string {
-	return GetLogger().GetLevel()
+	if globalLogger != nil {
+		return globalLogger.GetLevel()
+	}
+	return ""
+}
+
+// Recover 恢复 panic 并记录日志
+// 设计意图：
+// 1. 程序保护：防止 panic 导致程序崩溃
+// 2. 错误记录：自动记录 panic 信息和堆栈
+// 3. 简单使用：只需在 defer 中调用
+// 4. 需要先调用 New 初始化全局实例
+func Recover() {
+	if r := recover(); r != nil {
+		stackTrace := getStackTrace(10)
+		if globalLogger != nil {
+			globalLogger.Error("panic recovered", "recover", r, "stacktrace", stackTrace)
+		}
+	}
 }
 
 // SamplingOptions 日志采样选项

@@ -12,9 +12,8 @@ import (
 func main() {
 	fmt.Println("=== Treasure-Slog 高吞吐量测试 ===")
 
-	// 获取日志实例
-	log := logger.GetLogger()
-	defer log.Sync()
+	// 直接使用全局函数
+	defer logger.Sync()
 
 	// 测试配置
 	const numLogs = 1000000
@@ -25,7 +24,7 @@ func main() {
 	// 预热
 	fmt.Println("预热中...")
 	for i := 0; i < 1000; i++ {
-		log.Info("Warmup", "i", i)
+		logger.Info("Warmup", "i", i)
 	}
 	time.Sleep(100 * time.Millisecond)
 
@@ -42,7 +41,7 @@ func main() {
 		go func(id int) {
 			defer wg.Done()
 			for j := 0; j < logsPerGoroutine; j++ {
-				log.Info("High throughput test",
+				logger.Info("High throughput test",
 					"goroutine", id,
 					"iteration", j,
 					"timestamp", time.Now().UnixNano(),

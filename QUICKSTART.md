@@ -17,6 +17,8 @@ go mod tidy
 
 #### 2.1 使用全局日志实例
 
+> 注意：GetLogger() 函数已被删除，建议使用全局函数接口
+
 ```go
 package main
 
@@ -25,13 +27,13 @@ import (
 )
 
 func main() {
-    // 获取全局日志实例（从命令行参数 --config 获取配置文件路径）
-    log := logger.GetLogger()
-    defer log.Sync() // 程序退出前必须调用
+    // 直接使用全局函数，无需获取日志实例
+    // 配置文件路径通过命令行参数 --config 指定
+    defer logger.Sync() // 程序退出前必须调用
     
     // 记录日志
-    log.Info("Hello", "name", "World")
-    log.Error("Something wrong", "error", "connection failed")
+    logger.Info("Hello", "name", "World")
+    logger.Error("Something wrong", "error", "connection failed")
 }
 ```
 
@@ -74,26 +76,15 @@ go run main.go --config=configs/config.highperf.yaml
 package main
 
 import (
-    "flag"
-    "os"
     logger "github.com/streasure/treasure-slog"
 )
 
 func main() {
-    // 解析命令行参数
-    configPath := flag.String("config", "", "配置文件路径")
-    flag.Parse()
-
-    // 设置环境变量
-    if *configPath != "" {
-        os.Setenv("LOG_CONFIG_PATH", *configPath)
-    }
-
-    // 获取日志实例
-    log := logger.GetLogger()
-    defer log.Sync()
+    // 配置文件路径通过命令行参数 --config 指定
+    // 例如：go run main.go --config=configs/config.yaml
+    defer logger.Sync()
     
-    log.Info("应用启动", "config", *configPath)
+    logger.Info("应用启动")
 }
 ```
 
