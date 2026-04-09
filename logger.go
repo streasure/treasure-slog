@@ -133,8 +133,8 @@ type logEntry struct {
 	level slog.Level      // 日志级别
 	ctx   context.Context // 上下文信息
 	// 不常用字段放在后面
-	args  []any           // 日志字段
-	hooks []Hook          // 钩子列表
+	args  []any  // 日志字段
+	hooks []Hook // 钩子列表
 }
 
 // Reset 重置日志条目
@@ -201,6 +201,7 @@ func newRingBuffer(capacity int) *ringBuffer {
 // 5. 内联优化：提高性能
 // 6. 汇编级别优化：使用更高效的原子操作
 // 7. 位运算优化：使用位运算替代取模，提高性能
+//
 //go:inline
 func (rb *ringBuffer) Push(entry *logEntry) bool {
 	tail := atomic.LoadUint64(&rb.tail)
@@ -227,6 +228,7 @@ func (rb *ringBuffer) Push(entry *logEntry) bool {
 // 5. 内联优化：提高性能
 // 6. 汇编级别优化：使用更高效的原子操作
 // 7. 位运算优化：使用位运算替代取模，提高性能
+//
 //go:inline
 func (rb *ringBuffer) Pop() *logEntry {
 	head := atomic.LoadUint64(&rb.head)
@@ -307,6 +309,12 @@ func newBatchWriter(writer io.Writer, batchSize int, flushInterval time.Duration
 // 3. 错误处理：返回写入错误
 // 4. 关闭检查：避免在关闭后写入
 // 5. 性能优化：减少锁持有时间
+// Write 将数据写入批量写入器
+// 注意：这里使用显式的Unlock而不是defer unlock，原因如下：
+// 1. 快速路径优化：当writer已关闭时，立即返回，避免defer带来的额外开销
+// 2. 性能考虑：减少锁持有时间，在高并发场景下提高性能
+// 3. 错误处理：确保在错误发生时立即释放锁
+// 4. 代码清晰度：显式的Unlock让代码执行流程更加清晰
 func (bw *batchWriter) Write(p []byte) (n int, err error) {
 	// 快速路径：检查是否已关闭
 	bw.mu.Lock()
@@ -981,14 +989,15 @@ func (l *SLogger) processArgs(args []any) []any {
 // 8. 内联优化：提高性能
 // 9. 激进内存优化：预分配和复用内存
 // 10. 汇编级别优化：减少指令数和分支预测失败
+//
 //go:inline
 func (l *SLogger) log(ctx context.Context, level slog.Level, msg string, args ...any) {
 	// 快速路径：检查日志级别（内联优化）
 	currentLevel := l.GetLevel()
 	// 使用更简洁的条件判断，减少分支预测失败
 	if (currentLevel == "error" && level < slog.LevelError) ||
-	   (currentLevel == "warn" && level < slog.LevelWarn) ||
-	   (currentLevel == "info" && level < slog.LevelInfo) {
+		(currentLevel == "warn" && level < slog.LevelWarn) ||
+		(currentLevel == "info" && level < slog.LevelInfo) {
 		return
 	}
 
@@ -1040,6 +1049,7 @@ func (l *SLogger) log(ctx context.Context, level slog.Level, msg string, args ..
 // 4. 支持context传递：使用InfoContext等方法
 // 5. 内存优化：减少内存分配
 // 6. 内联优化：提高性能
+//
 //go:inline
 func (l *SLogger) processEntry(entry *logEntry) {
 	// 执行钩子
