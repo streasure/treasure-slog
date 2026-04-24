@@ -22,7 +22,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unsafe"
 
 	"gopkg.in/natefinch/lumberjack.v2"
 
@@ -610,9 +609,6 @@ type SLogger struct {
 	stopCh  chan struct{}  // 停止信号
 	wg      sync.WaitGroup // 等待组，用于优雅关闭
 
-	// 字段缓存
-	fieldCache sync.Map // 字段缓存，提高性能
-
 	// 对象池
 	usePool bool // 是否使用对象池
 }
@@ -914,69 +910,6 @@ func (l *SLogger) createHandler(writer io.Writer) slog.Handler {
 	return handler
 }
 
-// getCachedField 获取缓存的字段
-// 设计意图：
-// 1. 提高性能：缓存常用字段，避免重复创建
-// 2. 减少内存分配：复用字段对象
-// 3. 线程安全：使用 sync.Map 实现并发安全
-func (l *SLogger) getCachedField(key string, value interface{}) (slog.Attr, bool) {
-	if !l.cfg.Log.FieldCache.Enabled {
-		return slog.Attr{}, false
-	}
-
-	cacheKey := fmt.Sprintf("%s:%v", key, value)
-	if attr, ok := l.fieldCache.Load(cacheKey); ok {
-		return attr.(slog.Attr), true
-	}
-	return slog.Attr{}, false
-}
-
-// cacheField 缓存字段
-// 设计意图：
-// 1. 缓存常用字段，提高后续使用的性能
-// 2. 线程安全：使用 sync.Map 实现并发安全
-func (l *SLogger) cacheField(key string, value interface{}) slog.Attr {
-	if !l.cfg.Log.FieldCache.Enabled {
-		return slog.Any(key, value)
-	}
-
-	cacheKey := fmt.Sprintf("%s:%v", key, value)
-	attr := slog.Any(key, value)
-	l.fieldCache.Store(cacheKey, attr)
-	return attr
-}
-
-// processArgs 处理日志参数，缓存常用字段
-// 设计意图：
-// 1. 字段缓存：缓存常用字段，提高性能
-// 2. 参数处理：确保参数格式正确
-// 3. 内存优化：减少内存分配
-func (l *SLogger) processArgs(args []any) []any {
-	if !l.cfg.Log.FieldCache.Enabled {
-		return args
-	}
-
-	processedArgs := make([]any, 0, len(args))
-	for i := 0; i < len(args); i += 2 {
-		if i+1 >= len(args) {
-			break
-		}
-		key, ok := args[i].(string)
-		if !ok {
-			processedArgs = append(processedArgs, args[i], args[i+1])
-			continue
-		}
-		value := args[i+1]
-		if attr, ok := l.getCachedField(key, value); ok {
-			processedArgs = append(processedArgs, attr.Key, attr.Value.Any())
-		} else {
-			processedArgs = append(processedArgs, key, value)
-			l.cacheField(key, value)
-		}
-	}
-	return processedArgs
-}
-
 // log 记录日志的通用方法
 // 设计意图：
 // 1. 快速路径：内联日志级别检查，提高性能
@@ -1030,13 +963,13 @@ func (l *SLogger) log(ctx context.Context, level slog.Level, msg string, args ..
 		if !l.ringBuf.Push(entry) {
 			// 缓冲区已满，直接处理（降级处理）
 			l.processEntry(entry)
-			entry.args = entry.args[:0]
+			entry.args = nil
 			logEntryPool.Put(entry)
 		}
 	} else {
 		// 缓冲区未初始化，直接处理
 		l.processEntry(entry)
-		entry.args = entry.args[:0]
+		entry.args = nil
 		logEntryPool.Put(entry)
 	}
 }
@@ -1172,7 +1105,6 @@ func (l *SLogger) With(args ...any) Logger {
 		cfg:           l.cfg,
 		workers:       l.workers,
 		stopCh:        l.stopCh,
-		fieldCache:    l.fieldCache,
 		usePool:       l.usePool,
 	}
 }
@@ -1204,7 +1136,6 @@ func (l *SLogger) WithContext(ctx context.Context) Logger {
 		cfg:           l.cfg,
 		workers:       l.workers,
 		stopCh:        l.stopCh,
-		fieldCache:    l.fieldCache,
 		usePool:       l.usePool,
 	}
 }
@@ -1627,12 +1558,4 @@ func (h *SamplingHandler) WithGroup(name string) slog.Handler {
 // 2. 性能优化：避免重复实现
 func (h *SamplingHandler) Enabled(ctx context.Context, level slog.Level) bool {
 	return h.handler.Enabled(ctx, level)
-}
-
-// unsafeString 零拷贝转换 []byte 到 string
-// 设计意图：
-// 1. 性能优化：避免内存拷贝
-// 2. 特殊场景使用：仅在确保安全的情况下使用
-func unsafeString(b []byte) string {
-	return *(*string)(unsafe.Pointer(&b))
 }
