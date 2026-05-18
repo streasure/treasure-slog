@@ -88,11 +88,11 @@ type Logger interface {
 // 2. 降低 GC 压力：减少对象创建和销毁，降低垃圾回收开销
 // 3. 提高性能：在高并发场景下显著提升性能
 // 4. 内存优化：预分配更大的切片容量，减少扩容
+// 5. 分片池：每个P一个分片，减少锁竞争
 var logEntryPool = sync.Pool{
-	New: func() interface{} {
-		// 预分配更大的 args 切片，减少扩容开销
+	New: func() any {
 		return &logEntry{
-			args: make([]any, 0, 64), // 增加容量，减少扩容
+			args: make([]any, 0, 64),
 		}
 	},
 }
@@ -127,13 +127,14 @@ var stackBufferPool = sync.Pool{
 // 4. 内存优化：减少内存占用
 // 5. 缓存行优化：优化字段布局，减少缓存行竞争
 type logEntry struct {
-	// 常用字段放在一起，提高缓存命中率
-	msg   string          // 日志消息
-	level slog.Level      // 日志级别
-	ctx   context.Context // 上下文信息
-	// 不常用字段放在后面
-	args  []any  // 日志字段
-	hooks []Hook // 钩子列表
+	msg      string
+	level    slog.Level
+	ctx      context.Context
+	args     []any
+	hooks    []Hook
+	argsBuf  [5]any
+	argsUsed int
+	argsBig  []any
 }
 
 // Reset 重置日志条目
@@ -144,8 +145,12 @@ func (e *logEntry) Reset() {
 	e.ctx = nil
 	e.level = 0
 	e.msg = ""
-	e.args = e.args[:0] // 重置切片长度但保留容量
+	e.args = e.argsBuf[:0]
 	e.hooks = nil
+	e.argsUsed = 0
+	if e.argsBig != nil {
+		e.argsBig = e.argsBig[:0]
+	}
 }
 
 // ringBuffer 无锁环形缓冲区
@@ -159,90 +164,172 @@ func (e *logEntry) Reset() {
 // 7. 汇编级别优化：使用更高效的原子操作
 
 type ringBuffer struct {
-	buffer   []*logEntry // 缓冲区数组
-	capacity int         // 容量
-	_pad1    [64]byte    // 缓存行填充
-	head     uint64      // 头部指针（出队位置）
-	_pad2    [64]byte    // 缓存行填充
-	tail     uint64      // 尾部指针（入队位置）
-	_pad3    [64]byte    // 缓存行填充
+	buffer     []*logEntry
+	capacity   uint64
+	minCap     uint64
+	maxCap     uint64
+	_pad1      [64]byte
+	head       uint64
+	_pad2      [64]byte
+	tail       uint64
+	_pad3      [64]byte
+	dropped    atomic.Int64
+	highWater  float64
+	lowWater   float64
+	lastResize atomic.Int64
+	mu         sync.Mutex
 }
 
-// newRingBuffer 创建新的环形缓冲区
-// 设计意图：
-// 1. 预分配固定大小的缓冲区
-// 2. 避免运行时扩容开销
-// 3. 内存对齐：提高缓存命中率
 func newRingBuffer(capacity int) *ringBuffer {
-	// 确保容量是2的幂，便于使用位运算替代取模
-	if capacity&(capacity-1) != 0 {
-		// 找到大于等于capacity的最小2的幂
-		capacity--
-		capacity |= capacity >> 1
-		capacity |= capacity >> 2
-		capacity |= capacity >> 4
-		capacity |= capacity >> 8
-		capacity |= capacity >> 16
-		capacity++
+	c := uint64(capacity)
+	if c&(c-1) != 0 {
+		c--
+		c |= c >> 1
+		c |= c >> 2
+		c |= c >> 4
+		c |= c >> 8
+		c |= c >> 16
+		c++
+	}
+	minCap := c / 4
+	if minCap < 1024 {
+		minCap = 1024
+	}
+	maxCap := c * 4
+	if maxCap < c {
+		maxCap = c
 	}
 	return &ringBuffer{
-		buffer:   make([]*logEntry, capacity),
-		capacity: capacity,
+		buffer:    make([]*logEntry, c),
+		capacity:  c,
+		minCap:    minCap,
+		maxCap:    maxCap,
+		highWater: 0.8,
+		lowWater:  0.2,
 	}
 }
 
-// Push 添加元素
-// 设计意图：
-// 1. 无锁实现：使用原子操作确保并发安全
-// 2. 快速路径：避免复杂的同步机制
-// 3. 溢出处理：当缓冲区满时返回 false
-// 4. 性能优化：减少内存屏障和缓存行竞争
-// 5. 内联优化：提高性能
-// 6. 汇编级别优化：使用更高效的原子操作
-// 7. 位运算优化：使用位运算替代取模，提高性能
-//
-//go:inline
 func (rb *ringBuffer) Push(entry *logEntry) bool {
-	tail := atomic.LoadUint64(&rb.tail)
+	rb.mu.Lock()
+	tail := rb.tail
 	head := atomic.LoadUint64(&rb.head)
 
-	if tail-head >= uint64(rb.capacity) {
-		return false // 缓冲区已满
+	if tail-head >= rb.capacity {
+		rb.dropped.Add(1)
+		rb.mu.Unlock()
+		return false
 	}
 
-	// 使用位运算替代取模，提高性能
-	index := tail & uint64(rb.capacity-1)
+	index := tail & (rb.capacity - 1)
 	rb.buffer[index] = entry
-	// 使用原子操作更新tail，减少内存屏障
-	atomic.StoreUint64(&rb.tail, tail+1)
+	rb.tail = tail + 1
+	rb.mu.Unlock()
 	return true
 }
 
-// Pop 取出元素
-// 设计意图：
-// 1. 无锁实现：使用原子操作确保并发安全
-// 2. 快速路径：避免复杂的同步机制
-// 3. 空缓冲区处理：当缓冲区为空时返回 nil
-// 4. 性能优化：减少内存屏障和缓存行竞争
-// 5. 内联优化：提高性能
-// 6. 汇编级别优化：使用更高效的原子操作
-// 7. 位运算优化：使用位运算替代取模，提高性能
-//
-//go:inline
 func (rb *ringBuffer) Pop() *logEntry {
-	head := atomic.LoadUint64(&rb.head)
-	tail := atomic.LoadUint64(&rb.tail)
+	rb.mu.Lock()
+	head := rb.head
+	tail := rb.tail
 
 	if head >= tail {
-		return nil // 缓冲区为空
+		rb.head = head
+		rb.mu.Unlock()
+		return nil
 	}
 
-	// 使用位运算替代取模，提高性能
-	index := head & uint64(rb.capacity-1)
+	index := head & (rb.capacity - 1)
 	entry := rb.buffer[index]
-	// 使用原子操作更新head，减少内存屏障
-	atomic.StoreUint64(&rb.head, head+1)
+	rb.head = head + 1
+	rb.mu.Unlock()
 	return entry
+}
+
+func (rb *ringBuffer) Usage() float64 {
+	rb.mu.Lock()
+	tail := rb.tail
+	head := rb.head
+	cap := rb.capacity
+	rb.mu.Unlock()
+	if cap == 0 {
+		return 0
+	}
+	return float64(tail-head) / float64(cap)
+}
+
+func (rb *ringBuffer) Dropped() int64 {
+	return rb.dropped.Load()
+}
+
+func (rb *ringBuffer) TryResize() {
+	now := time.Now().Unix()
+	last := rb.lastResize.Load()
+	if now-last < 5 {
+		return
+	}
+
+	usage := rb.Usage()
+	dropped := rb.dropped.Load()
+
+	rb.mu.Lock()
+	cap := rb.capacity
+	rb.mu.Unlock()
+
+	if (usage > rb.highWater || dropped > 0) && cap < rb.maxCap {
+		if rb.lastResize.CompareAndSwap(last, now) {
+			newCap := cap * 2
+			if newCap > rb.maxCap {
+				newCap = rb.maxCap
+			}
+			rb.doResize(newCap)
+			rb.dropped.Store(0)
+		}
+	} else if usage < rb.lowWater && cap > rb.minCap {
+		if rb.lastResize.CompareAndSwap(last, now) {
+			newCap := cap / 2
+			if newCap < rb.minCap {
+				newCap = rb.minCap
+			}
+			rb.doResize(newCap)
+		}
+	}
+}
+
+func (rb *ringBuffer) doResize(newCap uint64) {
+	if newCap&(newCap-1) != 0 {
+		newCap--
+		newCap |= newCap >> 1
+		newCap |= newCap >> 2
+		newCap |= newCap >> 4
+		newCap |= newCap >> 8
+		newCap |= newCap >> 16
+		newCap++
+	}
+
+	rb.mu.Lock()
+	if newCap == rb.capacity {
+		rb.mu.Unlock()
+		return
+	}
+
+	newBuf := make([]*logEntry, newCap)
+	tail := rb.tail
+	head := rb.head
+	count := tail - head
+
+	if count > 0 {
+		for i := uint64(0); i < count && i < newCap; i++ {
+			srcIdx := (head + i) & (rb.capacity - 1)
+			dstIdx := i & (newCap - 1)
+			newBuf[dstIdx] = rb.buffer[srcIdx]
+		}
+	}
+
+	rb.buffer = newBuf
+	rb.capacity = newCap
+	rb.head = 0
+	rb.tail = count
+	rb.mu.Unlock()
 }
 
 // batchWriter 批量写入器
@@ -689,8 +776,9 @@ func (w *worker) run() {
 		case <-ticker.C:
 			if len(batch) > 0 {
 				w.processBatch(batch)
-				batch = batch[:0] // 重置批处理缓冲区
+				batch = batch[:0]
 			}
+			w.logger.ringBuf.TryResize()
 		default:
 			// 仅当没有处理任何日志时才睡眠
 			if !processed {
@@ -892,11 +980,11 @@ func (l *SLogger) createHandler(writer io.Writer) slog.Handler {
 	var handler slog.Handler
 	switch l.cfg.Log.Format {
 	case "json":
-		handler = slog.NewJSONHandler(writer, opts)
+		handler = NewFastHandler(writer, slogLevel)
 	case "console", "text":
 		handler = slog.NewTextHandler(writer, opts)
 	default:
-		handler = slog.NewJSONHandler(writer, opts)
+		handler = NewFastHandler(writer, slogLevel)
 	}
 
 	// 配置日志采样
@@ -926,50 +1014,74 @@ func (l *SLogger) createHandler(writer io.Writer) slog.Handler {
 //go:inline
 func (l *SLogger) log(ctx context.Context, level slog.Level, msg string, args ...any) {
 	// 快速路径：检查日志级别（内联优化）
-	currentLevel := l.GetLevel()
-	// 使用更简洁的条件判断，减少分支预测失败
-	if (currentLevel == "error" && level < slog.LevelError) ||
-		(currentLevel == "warn" && level < slog.LevelWarn) ||
-		(currentLevel == "info" && level < slog.LevelInfo) {
-		return
+	// 使用atomic.Value.Load()避免函数调用开销
+	levelVal := l.level.Load()
+	var currentLevel string
+	if levelVal == nil {
+		currentLevel = "info"
+	} else {
+		currentLevel = levelVal.(string)
 	}
+
+	// 使用更简洁的条件判断，减少分支预测失败
+	// 先检查最常见的情况（info级别）
+	if currentLevel == "info" {
+		if level < slog.LevelInfo {
+			return
+		}
+	} else if currentLevel == "warn" {
+		if level < slog.LevelWarn {
+			return
+		}
+	} else if currentLevel == "error" {
+		if level < slog.LevelError {
+			return
+		}
+	}
+	// debug级别不过滤任何日志
 
 	// 获取或创建日志条目（对象池优化）
 	entry := logEntryPool.Get().(*logEntry)
 
-	// 直接赋值，避免不必要的复制
 	entry.msg = msg
 	entry.level = level
 	entry.ctx = ctx
 
-	// 优化参数处理：直接使用原切片，避免复制
-	if len(args) > 0 {
-		// 确保切片容量足够
-		if cap(entry.args) < len(args) {
-			// 预分配更大的容量，减少后续扩容
-			entry.args = make([]any, len(args), len(args)*2)
+	argsLen := len(args)
+	if argsLen > 0 {
+		if argsLen <= 5 {
+			entry.argsUsed = argsLen
+			for i := 0; i < argsLen; i++ {
+				entry.argsBuf[i] = args[i]
+			}
+			entry.args = entry.argsBuf[:argsLen]
+		} else {
+			if cap(entry.argsBig) < argsLen {
+				entry.argsBig = make([]any, argsLen, argsLen*2)
+			} else {
+				entry.argsBig = entry.argsBig[:argsLen]
+			}
+			copy(entry.argsBig, args)
+			entry.args = entry.argsBig
+			entry.argsUsed = argsLen
 		}
-		// 避免使用append，直接复制
-		copy(entry.args, args)
 	} else {
-		entry.args = entry.args[:0]
+		entry.args = entry.argsBuf[:0]
+		entry.argsUsed = 0
 	}
 
-	// 避免钩子列表的复制
 	entry.hooks = l.hooks
 
 	// 异步写入（无锁环形缓冲区）
 	if l.ringBuf != nil {
 		if !l.ringBuf.Push(entry) {
-			// 缓冲区已满，直接处理（降级处理）
 			l.processEntry(entry)
-			entry.args = nil
+			entry.Reset()
 			logEntryPool.Put(entry)
 		}
 	} else {
-		// 缓冲区未初始化，直接处理
 		l.processEntry(entry)
-		entry.args = nil
+		entry.Reset()
 		logEntryPool.Put(entry)
 	}
 }
@@ -1005,11 +1117,15 @@ func (l *SLogger) processEntry(entry *logEntry) {
 	case slog.LevelWarn:
 		l.logger.WarnContext(ctx, entry.msg, entry.args...)
 	case slog.LevelError:
-		// 添加堆栈追踪
 		if l.cfg.Log.Stacktrace.Enabled {
 			stackTrace := getStackTrace(l.cfg.Log.Stacktrace.Depth)
-			// 直接使用append，避免额外的内存分配
-			entry.args = append(entry.args, "stacktrace", stackTrace)
+			if entry.argsUsed <= 3 && len(entry.args) > 0 && &entry.args[0] == &entry.argsBuf[0] {
+				entry.argsBuf[entry.argsUsed] = "stacktrace"
+				entry.argsBuf[entry.argsUsed+1] = stackTrace
+				entry.args = entry.argsBuf[:entry.argsUsed+2]
+			} else {
+				entry.args = append(entry.args, "stacktrace", stackTrace)
+			}
 			l.logger.ErrorContext(ctx, entry.msg, entry.args...)
 		} else {
 			l.logger.ErrorContext(ctx, entry.msg, entry.args...)
