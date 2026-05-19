@@ -81,8 +81,16 @@ func (h *FastHandler) Handle(_ context.Context, r slog.Record) error {
 
 	buf = append(buf, '}', '\n')
 
-	_, err := h.w.Write(buf)
-	return err
+	var writeErr error
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				writeErr = fmt.Errorf("[treasure-slog] FastHandler write panic: %v", r)
+			}
+		}()
+		_, writeErr = h.w.Write(buf)
+	}()
+	return writeErr
 }
 
 func (h *FastHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
@@ -251,7 +259,7 @@ func appendUint(buf []byte, v uint64) []byte {
 }
 
 func appendFloat(buf []byte, f float64, bits int) []byte {
-	var tmp [32]byte
+	var tmp [64]byte
 	n := formatFloat(tmp[:], f, bits)
 	buf = append(buf, tmp[:n]...)
 	return buf

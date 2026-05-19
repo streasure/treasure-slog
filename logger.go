@@ -573,6 +573,10 @@ func (nw *networkWriter) Write(p []byte) (n int, err error) {
 	conn = nw.conn
 	nw.mu.RUnlock()
 
+	if conn == nil {
+		return 0, fmt.Errorf("network writer: connection is nil")
+	}
+
 	// 重试机制试 retry 次
 	for i := 0; i <= nw.retry; i++ {
 		n, err = conn.Write(p)
@@ -588,6 +592,9 @@ func (nw *networkWriter) Write(p []byte) (n int, err error) {
 			nw.mu.RLock()
 			conn = nw.conn
 			nw.mu.RUnlock()
+			if conn == nil {
+				continue
+			}
 		}
 	}
 
@@ -646,8 +653,10 @@ func (hw *httpWriter) Write(p []byte) (n int, err error) {
 	for i := 0; i <= hw.retry; i++ {
 		resp, err := hw.client.Post(hw.url, "application/json", bytes.NewReader(p))
 		if err == nil {
-			resp.Body.Close()
-			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			if resp != nil && resp.Body != nil {
+				resp.Body.Close()
+			}
+			if resp != nil && resp.StatusCode >= 200 && resp.StatusCode < 300 {
 				return len(p), nil
 			}
 		}
@@ -692,9 +701,9 @@ type SLogger struct {
 	cfg *config.Config // 配置信息
 
 	// 工作线程
-	workers []*worker      // 工作线程列表
-	stopCh  chan struct{}  // 停止信号
-	wg      sync.WaitGroup // 等待组，用于优雅关闭
+	workers []*worker       // 工作线程列表
+	stopCh  chan struct{}   // 停止信号
+	wg      *sync.WaitGroup // 等待组，用于优雅关闭
 
 	// 对象池
 	usePool bool // 是否使用对象池
@@ -707,20 +716,23 @@ type SLogger struct {
 // 3. 优雅关闭：支持平滑停止
 
 type worker struct {
-	id     int           // 工作线程 ID
-	logger *SLogger      // 日志器引用
-	stopCh chan struct{} // 停止信号
+	id      int
+	logger  *SLogger
+	stopCh  chan struct{}
+	wg      *sync.WaitGroup
+	stopped atomic.Bool
 }
 
 // newWorker 创建新的工作线程
 // 设计意图：
 // 1. 初始化工作线程配置
 // 2. 准备停止信号通道
-func newWorker(id int, logger *SLogger) *worker {
+func newWorker(id int, logger *SLogger, wg *sync.WaitGroup) *worker {
 	return &worker{
 		id:     id,
 		logger: logger,
 		stopCh: make(chan struct{}),
+		wg:     wg,
 	}
 }
 
@@ -729,6 +741,7 @@ func newWorker(id int, logger *SLogger) *worker {
 // 1. 启动后台 goroutine 处理日志
 // 2. 非阻塞启动，不影响主线程
 func (w *worker) start() {
+	w.wg.Add(1)
 	go w.run()
 }
 
@@ -741,7 +754,14 @@ func (w *worker) start() {
 // 5. 性能优化：减少CPU空转和内存分配
 // 6. 汇编级别优化：减少分支预测失败
 func (w *worker) run() {
-	// 预分配批处理缓冲区，减少内存分配
+	defer func() {
+		w.wg.Done()
+		if r := recover(); r != nil {
+			stackTrace := getStackTrace(10)
+			fmt.Fprintf(os.Stderr, "[treasure-slog] worker %d panic recovered: %v\n%s\n", w.id, r, stackTrace)
+		}
+	}()
+
 	batch := make([]*logEntry, 0, w.logger.cfg.Log.Async.BatchSize)
 	flushInterval := time.Duration(w.logger.cfg.Log.Async.FlushInterval) * time.Millisecond
 	ticker := time.NewTicker(flushInterval)
@@ -811,10 +831,7 @@ func (w *worker) processBatch(batch []*logEntry) {
 // 1. 发送停止信号
 // 2. 触发工作线程的清理逻辑
 func (w *worker) stop() {
-	select {
-	case <-w.stopCh:
-		// 通道已经关闭，不需要再次关闭
-	default:
+	if w.stopped.CompareAndSwap(false, true) {
 		close(w.stopCh)
 	}
 }
@@ -856,6 +873,7 @@ func New(configPath string) (Logger, error) {
 		cfg:     cfg,
 		hooks:   []Hook{},
 		stopCh:  make(chan struct{}),
+		wg:      &sync.WaitGroup{},
 		usePool: cfg.Log.Performance.UsePool,
 	}
 
@@ -928,7 +946,7 @@ func New(configPath string) (Logger, error) {
 	// 启动工作线程（强制启用）
 	slogger.workers = make([]*worker, cfg.Log.Async.Workers)
 	for i := 0; i < cfg.Log.Async.Workers; i++ {
-		slogger.workers[i] = newWorker(i, slogger)
+		slogger.workers[i] = newWorker(i, slogger, slogger.wg)
 		slogger.workers[i].start()
 	}
 
@@ -1097,9 +1115,16 @@ func (l *SLogger) log(ctx context.Context, level slog.Level, msg string, args ..
 //
 //go:inline
 func (l *SLogger) processEntry(entry *logEntry) {
-	// 执行钩子
+	// 执行钩子（保护用户自定义Hook可能产生的panic）
 	for _, hook := range entry.hooks {
-		hook.Run(entry.msg, entry.level.String(), entry.args...)
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Fprintf(os.Stderr, "[treasure-slog] hook panic recovered: %v\n", r)
+				}
+			}()
+			hook.Run(entry.msg, entry.level.String(), entry.args...)
+		}()
 	}
 
 	// 如果没有context，使用context.Background()
@@ -1221,6 +1246,7 @@ func (l *SLogger) With(args ...any) Logger {
 		cfg:           l.cfg,
 		workers:       l.workers,
 		stopCh:        l.stopCh,
+		wg:            l.wg,
 		usePool:       l.usePool,
 	}
 }
@@ -1252,6 +1278,7 @@ func (l *SLogger) WithContext(ctx context.Context) Logger {
 		cfg:           l.cfg,
 		workers:       l.workers,
 		stopCh:        l.stopCh,
+		wg:            l.wg,
 		usePool:       l.usePool,
 	}
 }
@@ -1291,10 +1318,18 @@ func (l *SLogger) AddHook(hook Hook) Logger {
 	copy(newHooks, l.hooks)
 	newHooks[len(l.hooks)] = hook
 	return &SLogger{
-		logger:     l.logger,
-		hooks:      newHooks,
-		fileLogger: l.fileLogger,
-		cfg:        l.cfg,
+		logger:        l.logger,
+		hooks:         newHooks,
+		fileLogger:    l.fileLogger,
+		level:         l.level,
+		ringBuf:       l.ringBuf,
+		batchWriter:   l.batchWriter,
+		networkWriter: l.networkWriter,
+		cfg:           l.cfg,
+		workers:       l.workers,
+		stopCh:        l.stopCh,
+		wg:            l.wg,
+		usePool:       l.usePool,
 	}
 }
 
@@ -1347,9 +1382,8 @@ func (l *SLogger) Sync() error {
 		}
 
 		// 等待所有工作线程完成
-		for _, worker := range l.workers {
-			<-worker.stopCh
-		}
+		l.wg.Wait()
+		l.workers = nil
 	}
 
 	// 关闭批量写入器
