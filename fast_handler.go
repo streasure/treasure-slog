@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"sync"
 	"time"
 )
 
+// FastHandler 高性能JSON日志处理器，零反射序列化
 type FastHandler struct {
 	w        io.Writer
 	level    slog.Leveler
@@ -16,21 +16,11 @@ type FastHandler struct {
 	groups   []string
 }
 
-var fastBufPool = sync.Pool{
-	New: func() any {
-		buf := make([]byte, 0, 512)
-		return &buf
-	},
-}
-
 func NewFastHandler(w io.Writer, level slog.Leveler) *FastHandler {
 	if level == nil {
 		level = slog.LevelInfo
 	}
-	return &FastHandler{
-		w:     w,
-		level: level,
-	}
+	return &FastHandler{w: w, level: level}
 }
 
 func (h *FastHandler) Enabled(_ context.Context, level slog.Level) bool {
@@ -42,55 +32,67 @@ func (h *FastHandler) Handle(_ context.Context, r slog.Record) error {
 		return nil
 	}
 
-	bp := fastBufPool.Get().(*[]byte)
-	buf := (*bp)[:0]
-	defer func() {
-		*bp = buf
-		fastBufPool.Put(bp)
-	}()
-
-	buf = append(buf, '{')
-
-	buf = append(buf, `"time":"`...)
-	buf = r.Time.AppendFormat(buf, time.RFC3339Nano)
-	buf = append(buf, `","level":"`...)
-	buf = appendLevel(buf, r.Level)
-	buf = append(buf, `","msg":`...)
-	buf = appendJSONString(buf, r.Message)
-
-	for _, a := range h.preAttrs {
-		if a.Key == "" {
-			continue
-		}
-		buf = append(buf, `,"`...)
-		buf = append(buf, a.Key...)
-		buf = append(buf, `":`...)
-		buf = appendAttrValue(buf, a.Value)
-	}
-
-	r.Attrs(func(a slog.Attr) bool {
-		if a.Key == "" {
-			return true
-		}
-		buf = append(buf, `,"`...)
-		buf = append(buf, a.Key...)
-		buf = append(buf, `":`...)
-		buf = appendAttrValue(buf, a.Value)
-		return true
-	})
-
-	buf = append(buf, '}', '\n')
-
-	var writeErr error
+	// 全局recover保护：确保任何序列化或写入panic都不会传播
+	var handleErr error
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
-				writeErr = fmt.Errorf("[treasure-slog] FastHandler write panic: %v", r)
+				handleErr = fmt.Errorf("[treasure-slog] FastHandler.Handle panic: %v", r)
 			}
 		}()
-		_, writeErr = h.w.Write(buf)
+
+		// 安全获取buffer
+		var bp *[]byte
+		if v := fastBufPool.Get(); v != nil {
+			if p, ok := v.(*[]byte); ok {
+				bp = p
+			}
+		}
+		if bp == nil {
+			tmp := make([]byte, 0, 512)
+			bp = &tmp
+		}
+		buf := (*bp)[:0]
+		defer func() {
+			*bp = buf
+			fastBufPool.Put(bp)
+		}()
+
+		buf = append(buf, `{"time":"`...)
+		buf = r.Time.AppendFormat(buf, time.RFC3339Nano)
+		buf = append(buf, `","level":"`...)
+		buf = appendLevel(buf, r.Level)
+		buf = append(buf, `","msg":`...)
+		buf = appendJSONString(buf, r.Message)
+
+		for _, a := range h.preAttrs {
+			if a.Key == "" {
+				continue
+			}
+			buf = append(buf, `,"`...)
+			buf = append(buf, a.Key...)
+			buf = append(buf, `":`...)
+			buf = appendAttrValue(buf, a.Value)
+		}
+
+		r.Attrs(func(a slog.Attr) bool {
+			if a.Key == "" {
+				return true
+			}
+			buf = append(buf, `,"`...)
+			buf = append(buf, a.Key...)
+			buf = append(buf, `":`...)
+			buf = appendAttrValue(buf, a.Value)
+			return true
+		})
+
+		buf = append(buf, '}', '\n')
+
+		if _, err := h.w.Write(buf); err != nil {
+			handleErr = err
+		}
 	}()
-	return writeErr
+	return handleErr
 }
 
 func (h *FastHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
@@ -100,12 +102,7 @@ func (h *FastHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	newAttrs := make([]slog.Attr, len(h.preAttrs)+len(attrs))
 	copy(newAttrs, h.preAttrs)
 	copy(newAttrs[len(h.preAttrs):], attrs)
-	return &FastHandler{
-		w:        h.w,
-		level:    h.level,
-		preAttrs: newAttrs,
-		groups:   h.groups,
-	}
+	return &FastHandler{w: h.w, level: h.level, preAttrs: newAttrs, groups: h.groups}
 }
 
 func (h *FastHandler) WithGroup(name string) slog.Handler {
@@ -115,36 +112,24 @@ func (h *FastHandler) WithGroup(name string) slog.Handler {
 	newGroups := make([]string, len(h.groups)+1)
 	copy(newGroups, h.groups)
 	newGroups[len(h.groups)] = name
-	return &FastHandler{
-		w:        h.w,
-		level:    h.level,
-		preAttrs: h.preAttrs,
-		groups:   newGroups,
-	}
+	return &FastHandler{w: h.w, level: h.level, preAttrs: h.preAttrs, groups: newGroups}
 }
+
+// --- 序列化辅助函数 ---
 
 func appendLevel(buf []byte, level slog.Level) []byte {
 	switch {
-	case level < slog.LevelDebug:
-		buf = append(buf, "DEBUG-1"...)
-	case level == slog.LevelDebug:
+	case level <= slog.LevelDebug:
 		buf = append(buf, "DEBUG"...)
-	case level < slog.LevelInfo:
-		buf = append(buf, "INFO-1"...)
-	case level == slog.LevelInfo:
+	case level <= slog.LevelInfo:
 		buf = append(buf, "INFO"...)
-	case level < slog.LevelWarn:
-		buf = append(buf, "WARN-1"...)
-	case level == slog.LevelWarn:
+	case level <= slog.LevelWarn:
 		buf = append(buf, "WARN"...)
-	case level < slog.LevelError:
-		buf = append(buf, "ERROR-1"...)
-	case level == slog.LevelError:
+	case level <= slog.LevelError:
 		buf = append(buf, "ERROR"...)
 	default:
 		buf = append(buf, "ERROR+"...)
-		l := level - slog.LevelError
-		buf = appendInt(buf, int64(l))
+		buf = appendInt(buf, int64(level-slog.LevelError))
 	}
 	return buf
 }
@@ -154,21 +139,16 @@ func appendAttrValue(buf []byte, v slog.Value) []byte {
 	case slog.KindString:
 		return appendJSONString(buf, v.String())
 	case slog.KindInt64:
-		buf = appendInt(buf, v.Int64())
-		return buf
+		return appendInt(buf, v.Int64())
 	case slog.KindUint64:
-		buf = appendUint(buf, v.Uint64())
-		return buf
+		return appendUint(buf, v.Uint64())
 	case slog.KindFloat64:
-		buf = appendFloat(buf, v.Float64(), 64)
-		return buf
+		return appendFloat(buf, v.Float64())
 	case slog.KindBool:
 		if v.Bool() {
-			buf = append(buf, `true`...)
-		} else {
-			buf = append(buf, `false`...)
+			return append(buf, "true"...)
 		}
-		return buf
+		return append(buf, "false"...)
 	case slog.KindDuration:
 		return appendJSONString(buf, v.Duration().String())
 	case slog.KindTime:
@@ -183,8 +163,7 @@ func appendAttrValue(buf []byte, v slog.Value) []byte {
 func appendJSONString(buf []byte, s string) []byte {
 	buf = append(buf, '"')
 	for i := 0; i < len(s); i++ {
-		c := s[i]
-		switch c {
+		switch s[i] {
 		case '"':
 			buf = append(buf, '\\', '"')
 		case '\\':
@@ -196,21 +175,19 @@ func appendJSONString(buf []byte, s string) []byte {
 		case '\t':
 			buf = append(buf, '\\', 't')
 		default:
-			if c < 0x20 {
+			if s[i] < 0x20 {
 				buf = append(buf, "\\u00"...)
-				buf = appendHex(buf, c)
+				buf = appendHex(buf, s[i])
 			} else {
-				buf = append(buf, c)
+				buf = append(buf, s[i])
 			}
 		}
 	}
-	buf = append(buf, '"')
-	return buf
+	return append(buf, '"')
 }
 
 func appendHex(buf []byte, b byte) []byte {
-	hi := b >> 4
-	lo := b & 0x0f
+	hi, lo := b>>4, b&0x0f
 	if hi < 10 {
 		buf = append(buf, hi+'0')
 	} else {
@@ -239,8 +216,7 @@ func appendInt(buf []byte, v int64) []byte {
 		tmp[pos] = byte(v%10) + '0'
 		v /= 10
 	}
-	buf = append(buf, tmp[pos:]...)
-	return buf
+	return append(buf, tmp[pos:]...)
 }
 
 func appendUint(buf []byte, v uint64) []byte {
@@ -254,95 +230,11 @@ func appendUint(buf []byte, v uint64) []byte {
 		tmp[pos] = byte(v%10) + '0'
 		v /= 10
 	}
-	buf = append(buf, tmp[pos:]...)
-	return buf
+	return append(buf, tmp[pos:]...)
 }
 
-func appendFloat(buf []byte, f float64, bits int) []byte {
-	var tmp [64]byte
-	n := formatFloat(tmp[:], f, bits)
-	buf = append(buf, tmp[:n]...)
-	return buf
-}
-
-func formatFloat(dst []byte, f float64, bits int) int {
-	abs := f
-	neg := false
-	if f < 0 {
-		neg = true
-		abs = -f
-	}
-
-	exp := 0
-	if abs >= 1e15 {
-		for abs >= 10 {
-			abs /= 10
-			exp++
-		}
-	} else if abs > 0 && abs < 1e-6 {
-		for abs < 1 {
-			abs *= 10
-			exp--
-		}
-	}
-
-	pos := 0
-	if neg {
-		dst[pos] = '-'
-		pos++
-	}
-
-	intPart := int64(abs)
-	fracPart := abs - float64(intPart)
-
-	pos += formatInt64(dst[pos:], intPart)
-
-	if fracPart > 1e-10 {
-		dst[pos] = '.'
-		pos++
-		for fracPart > 1e-10 && pos < len(dst)-1 {
-			fracPart *= 10
-			digit := int(fracPart)
-			dst[pos] = byte(digit) + '0'
-			pos++
-			fracPart -= float64(digit)
-		}
-	}
-
-	if exp != 0 {
-		dst[pos] = 'e'
-		pos++
-		if exp > 0 {
-			dst[pos] = '+'
-		} else {
-			dst[pos] = '-'
-			exp = -exp
-		}
-		pos++
-		pos += formatInt64(dst[pos:], int64(exp))
-	}
-
-	return pos
-}
-
-func formatInt64(dst []byte, v int64) int {
-	if v == 0 {
-		dst[0] = '0'
-		return 1
-	}
-	pos := 0
-	var tmp [20]byte
-	n := 0
-	for v > 0 {
-		tmp[n] = byte(v%10) + '0'
-		v /= 10
-		n++
-	}
-	for i := n - 1; i >= 0; i-- {
-		dst[pos] = tmp[i]
-		pos++
-	}
-	return pos
+func appendFloat(buf []byte, f float64) []byte {
+	return append(buf, fmt.Sprintf("%g", f)...)
 }
 
 var _ slog.Handler = (*FastHandler)(nil)
