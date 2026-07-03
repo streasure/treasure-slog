@@ -501,10 +501,9 @@ func TestPanicRobustness(t *testing.T) {
 						t.Errorf("FastHandlerWithNilWriter panic: %v", r)
 					}
 				}()
-				h := NewFastHandler(nil, slog.LevelDebug)
+				h := NewFastHandler(nil, nil)
 				r := slog.NewRecord(time.Now(), slog.LevelInfo, "test", 0)
 				err := h.Handle(context.Background(), r)
-				// nil writer should return nil (early return)
 				_ = err
 				return nil
 			},

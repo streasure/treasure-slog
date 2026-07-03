@@ -360,6 +360,7 @@ type SLogger struct {
 	hooks         []Hook
 	fileLogger    *lumberjack.Logger
 	level         atomic.Int32
+	levelVar      slog.LevelVar // 用于TextHandler动态级别
 	ringBuf       *ringBuffer
 	batchWriter   *batchWriter
 	networkWriter io.WriteCloser
@@ -582,26 +583,12 @@ func New(configPath string) (Logger, error) {
 }
 
 func (l *SLogger) createHandler(writer io.Writer) slog.Handler {
-	level := l.GetLevel()
-	var slogLevel slog.Level
-	switch level {
-	case "debug":
-		slogLevel = slog.LevelDebug
-	case "info":
-		slogLevel = slog.LevelInfo
-	case "warn":
-		slogLevel = slog.LevelWarn
-	case "error":
-		slogLevel = slog.LevelError
-	default:
-		slogLevel = slog.LevelInfo
-	}
-
 	var handler slog.Handler
 	switch l.cfg.Log.Format {
 	case "console", "text":
+		l.levelVar.Set(slog.Level(l.level.Load()))
 		handler = slog.NewTextHandler(writer, &slog.HandlerOptions{
-			Level: slogLevel,
+			Level: &l.levelVar,
 			ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
 				if a.Key == slog.TimeKey {
 					if t, ok := a.Value.Any().(time.Time); ok {
@@ -612,7 +599,7 @@ func (l *SLogger) createHandler(writer io.Writer) slog.Handler {
 			},
 		})
 	default:
-		handler = NewFastHandler(writer, slogLevel)
+		handler = NewFastHandler(writer, &l.level)
 	}
 
 	if l.cfg.Log.Sampling.Enabled {
@@ -806,6 +793,7 @@ func (l *SLogger) With(args ...any) Logger {
 		hooks:         l.hooks,
 		fileLogger:    l.fileLogger,
 		level:         l.level,
+		levelVar:      l.levelVar,
 		ringBuf:       l.ringBuf,
 		batchWriter:   l.batchWriter,
 		networkWriter: l.networkWriter,
@@ -832,6 +820,7 @@ func (l *SLogger) WithContext(ctx context.Context) Logger {
 		hooks:         l.hooks,
 		fileLogger:    l.fileLogger,
 		level:         l.level,
+		levelVar:      l.levelVar,
 		ringBuf:       l.ringBuf,
 		batchWriter:   l.batchWriter,
 		networkWriter: l.networkWriter,
@@ -874,6 +863,7 @@ func (l *SLogger) AddHook(hook Hook) Logger {
 		hooks:         newHooks,
 		fileLogger:    l.fileLogger,
 		level:         l.level,
+		levelVar:      l.levelVar,
 		ringBuf:       l.ringBuf,
 		batchWriter:   l.batchWriter,
 		networkWriter: l.networkWriter,
@@ -907,19 +897,10 @@ func (l *SLogger) SetLevel(level string) {
 		slogLevel = slog.LevelInfo
 	}
 	l.level.Store(int32(slogLevel))
-
-	if l.logger != nil && l.cfg != nil {
-		var writer io.Writer
-		if l.batchWriter != nil {
-			writer = l.batchWriter
-		} else if l.fileLogger != nil {
-			writer = l.fileLogger
-		} else {
-			writer = os.Stdout
-		}
-		handler := l.createHandler(writer)
-		l.logger = slog.New(handler)
-	}
+	l.levelVar.Set(slogLevel)
+	// FastHandler 通过 &l.level 引用动态感知变化
+	// TextHandler 通过 &l.levelVar 引用动态感知变化
+	// 无需重建 handler
 }
 
 func (l *SLogger) GetLevel() string {

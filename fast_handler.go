@@ -5,26 +5,34 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sync/atomic"
 	"time"
 )
 
 // FastHandler 高性能JSON日志处理器，零反射序列化
+// 使用 *atomic.Int32 持有 level 引用，支持动态级别变更
 type FastHandler struct {
 	w        io.Writer
-	level    slog.Leveler
+	levelRef *atomic.Int32 // 指向 SLogger.level，动态感知级别变化
 	preAttrs []slog.Attr
 	groups   []string
 }
 
-func NewFastHandler(w io.Writer, level slog.Leveler) *FastHandler {
-	if level == nil {
-		level = slog.LevelInfo
+func NewFastHandler(w io.Writer, levelRef *atomic.Int32) *FastHandler {
+	if levelRef == nil {
+		v := atomic.Int32{}
+		v.Store(int32(slog.LevelInfo))
+		levelRef = &v
 	}
-	return &FastHandler{w: w, level: level}
+	return &FastHandler{w: w, levelRef: levelRef}
 }
 
 func (h *FastHandler) Enabled(_ context.Context, level slog.Level) bool {
-	return level >= h.level.Level()
+	currentLevel := slog.Level(h.levelRef.Load())
+	if currentLevel == 0 {
+		currentLevel = slog.LevelInfo
+	}
+	return level >= currentLevel
 }
 
 func (h *FastHandler) Handle(_ context.Context, r slog.Record) error {
@@ -102,7 +110,7 @@ func (h *FastHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	newAttrs := make([]slog.Attr, len(h.preAttrs)+len(attrs))
 	copy(newAttrs, h.preAttrs)
 	copy(newAttrs[len(h.preAttrs):], attrs)
-	return &FastHandler{w: h.w, level: h.level, preAttrs: newAttrs, groups: h.groups}
+	return &FastHandler{w: h.w, levelRef: h.levelRef, preAttrs: newAttrs, groups: h.groups}
 }
 
 func (h *FastHandler) WithGroup(name string) slog.Handler {
@@ -112,7 +120,7 @@ func (h *FastHandler) WithGroup(name string) slog.Handler {
 	newGroups := make([]string, len(h.groups)+1)
 	copy(newGroups, h.groups)
 	newGroups[len(h.groups)] = name
-	return &FastHandler{w: h.w, level: h.level, preAttrs: h.preAttrs, groups: newGroups}
+	return &FastHandler{w: h.w, levelRef: h.levelRef, preAttrs: h.preAttrs, groups: newGroups}
 }
 
 // --- 序列化辅助函数 ---
