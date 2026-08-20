@@ -49,6 +49,9 @@ func (h *FastHandler) Handle(_ context.Context, r slog.Record) error {
 			}
 		}()
 
+		endHandle := timing.startTimer(&timing.handlerHandleNS)
+		defer endHandle()
+
 		// 安全获取buffer
 		var bp *[]byte
 		if v := fastBufPool.Get(); v != nil {

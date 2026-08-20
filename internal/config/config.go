@@ -13,24 +13,25 @@ type Config struct {
 
 // LogConfig 日志配置
 type LogConfig struct {
-	Level       string          `yaml:"level"`
-	Format      string          `yaml:"format"`
-	Async       AsyncConfig     `yaml:"async"`
-	Console     ConsoleConfig   `yaml:"console"`
-	File        FileConfig      `yaml:"file"`
-	Network     NetworkConfig   `yaml:"network"`
-	Stacktrace  StackConfig     `yaml:"stacktrace"`
-	Sampling    SamplingConfig  `yaml:"sampling"`
-	FieldCache  FieldCacheConfig `yaml:"field_cache"`
+	Level       string            `yaml:"level"`
+	Format      string            `yaml:"format"`
+	Async       AsyncConfig       `yaml:"async"`
+	Console     ConsoleConfig     `yaml:"console"`
+	File        FileConfig        `yaml:"file"`
+	Network     NetworkConfig     `yaml:"network"`
+	Stacktrace  StackConfig       `yaml:"stacktrace"`
+	Sampling    SamplingConfig    `yaml:"sampling"`
+	FieldCache  FieldCacheConfig  `yaml:"field_cache"`
 	Performance PerformanceConfig `yaml:"performance"`
 }
 
 // AsyncConfig 异步配置
 type AsyncConfig struct {
-	BufferSize    int `yaml:"buffer_size"`
-	BatchSize     int `yaml:"batch_size"`
-	FlushInterval int `yaml:"flush_interval"`
-	Workers       int `yaml:"workers"`
+	Enabled       bool `yaml:"enabled"`
+	BufferSize    int  `yaml:"buffer_size"`
+	BatchSize     int  `yaml:"batch_size"`
+	FlushInterval int  `yaml:"flush_interval"`
+	Workers       int  `yaml:"workers"`
 }
 
 // ConsoleConfig 控制台输出配置
@@ -115,6 +116,13 @@ func LoadConfig(path string) (*Config, error) {
 
 // setDefaults 设置默认值
 func setDefaults(cfg *Config) {
+	// async.enabled 默认为 true：如果配置中没有 async 块或 enabled 字段为零值，
+	// 且其他 async 字段也为零值，视为未配置 async，默认启用异步
+	if !cfg.Log.Async.Enabled && cfg.Log.Async.Workers == 0 &&
+		cfg.Log.Async.BufferSize == 0 && cfg.Log.Async.BatchSize == 0 &&
+		cfg.Log.Async.FlushInterval == 0 {
+		cfg.Log.Async.Enabled = true
+	}
 	if cfg.Log.Async.BufferSize == 0 {
 		cfg.Log.Async.BufferSize = 10000
 	}

@@ -59,6 +59,138 @@ var fastBufPool = sync.Pool{
 	},
 }
 
+// --- timingStats 核心路径耗时统计 ---
+
+var timing = newTimingStats()
+
+type timingStats struct {
+	enabled atomic.Bool
+
+	// 计数器
+	logCalls       atomic.Int64 // 总 log() 调用次数
+	logFiltered    atomic.Int64 // 级别过滤丢弃次数
+	logSyncPath    atomic.Int64 // 同步路径处理次数
+	logAsyncPush   atomic.Int64 // 异步推入环形缓冲区次数
+	logFallback    atomic.Int64 // 缓冲区满降级同步次数
+	batchProcessed atomic.Int64 // 批量处理次数
+	entriesHandled atomic.Int64 // 总处理日志条目数
+
+	// 耗时累加（纳秒）
+	logTotalNS      atomic.Int64 // log() 总耗时（含级别检查到推入/处理）
+	levelCheckNS    atomic.Int64 // 级别检查耗时
+	poolGetNS       atomic.Int64 // 对象池获取耗时
+	ringBufPushNS   atomic.Int64 // 环形缓冲区 Push 耗时
+	syncProcessNS   atomic.Int64 // 同步 processEntryDirect 耗时
+	asyncProcessNS  atomic.Int64 // 异步 processEntry 耗时
+	hookExecNS      atomic.Int64 // Hook 执行耗时
+	slogCallNS      atomic.Int64 // slog.DebugContext/InfoContext 等调用耗时
+	handlerHandleNS atomic.Int64 // FastHandler.Handle 序列化+写入耗时
+	batchProcessNS  atomic.Int64 // worker.processBatch 总耗时
+}
+
+func newTimingStats() *timingStats {
+	return &timingStats{}
+}
+
+// EnableTiming 开启或关闭耗时统计
+func EnableTiming(enable bool) {
+	timing.enabled.Store(enable)
+}
+
+// ResetTiming 重置所有统计计数器（不影响 enabled 状态）
+func ResetTiming() {
+	timing.logCalls.Store(0)
+	timing.logFiltered.Store(0)
+	timing.logSyncPath.Store(0)
+	timing.logAsyncPush.Store(0)
+	timing.logFallback.Store(0)
+	timing.batchProcessed.Store(0)
+	timing.entriesHandled.Store(0)
+	timing.logTotalNS.Store(0)
+	timing.levelCheckNS.Store(0)
+	timing.poolGetNS.Store(0)
+	timing.ringBufPushNS.Store(0)
+	timing.syncProcessNS.Store(0)
+	timing.asyncProcessNS.Store(0)
+	timing.hookExecNS.Store(0)
+	timing.slogCallNS.Store(0)
+	timing.handlerHandleNS.Store(0)
+	timing.batchProcessNS.Store(0)
+}
+
+// DumpTiming 输出耗时统计到 stderr
+func DumpTiming() {
+	if !timing.enabled.Load() {
+		fmt.Fprintln(os.Stderr, "[treasure-slog] timing disabled, call EnableTiming(true) first")
+		return
+	}
+
+	logCalls := timing.logCalls.Load()
+	if logCalls == 0 {
+		fmt.Fprintln(os.Stderr, "[treasure-slog] no log calls recorded")
+		return
+	}
+
+	filtered := timing.logFiltered.Load()
+	syncPath := timing.logSyncPath.Load()
+	asyncPush := timing.logAsyncPush.Load()
+	fallback := timing.logFallback.Load()
+	batches := timing.batchProcessed.Load()
+	handled := timing.entriesHandled.Load()
+
+	fmt.Fprintf(os.Stderr, "\n=== treasure-slog 耗时统计 ===\n")
+	fmt.Fprintf(os.Stderr, "总调用:           %d\n", logCalls)
+	fmt.Fprintf(os.Stderr, "级别过滤丢弃:     %d (%.1f%%)\n", filtered, pct(filtered, logCalls))
+	fmt.Fprintf(os.Stderr, "同步路径处理:     %d\n", syncPath)
+	fmt.Fprintf(os.Stderr, "异步推入:         %d\n", asyncPush)
+	fmt.Fprintf(os.Stderr, "降级同步(缓冲满): %d\n", fallback)
+	fmt.Fprintf(os.Stderr, "批量处理次数:     %d\n", batches)
+	fmt.Fprintf(os.Stderr, "处理条目总数:     %d\n", handled)
+
+	printAvg("log() 总耗时", timing.logTotalNS.Load(), logCalls)
+	printAvg("级别检查", timing.levelCheckNS.Load(), logCalls)
+	printAvg("对象池获取", timing.poolGetNS.Load(), asyncPush)
+	printAvg("环形缓冲区Push", timing.ringBufPushNS.Load(), asyncPush)
+	printAvg("同步processEntry", timing.syncProcessNS.Load(), syncPath)
+	printAvg("异步processEntry", timing.asyncProcessNS.Load(), handled)
+	printAvg("Hook执行", timing.hookExecNS.Load(), handled)
+	printAvg("slog调用", timing.slogCallNS.Load(), handled)
+	printAvg("Handler.Handle", timing.handlerHandleNS.Load(), handled)
+	printAvg("批量处理", timing.batchProcessNS.Load(), batches)
+	fmt.Fprintln(os.Stderr, "=================================")
+}
+
+func printAvg(name string, totalNS int64, count int64) {
+	if count == 0 {
+		fmt.Fprintf(os.Stderr, "%-22s 0 (count=0)\n", name+":")
+		return
+	}
+	avg := float64(totalNS) / float64(count)
+	fmt.Fprintf(os.Stderr, "%-22s avg=%.0f ns  total=%d ns\n", name+":", avg, totalNS)
+}
+
+func pct(part, total int64) float64 {
+	if total == 0 {
+		return 0
+	}
+	return float64(part) / float64(total) * 100
+}
+
+// --- 辅助：带耗时的计时器 ---
+
+// timingNoop 预分配的 no-op 函数，避免每次 startTimer 在禁用时分配闭包到堆
+var timingNoop = func() {}
+
+func (t *timingStats) startTimer(acc *atomic.Int64) (end func()) {
+	if !t.enabled.Load() {
+		return timingNoop
+	}
+	start := time.Now()
+	return func() {
+		acc.Add(int64(time.Since(start)))
+	}
+}
+
 // --- logEntry ---
 
 type logEntry struct {
@@ -67,6 +199,7 @@ type logEntry struct {
 	ctx   context.Context
 	args  []any
 	hooks []Hook
+	ts    time.Time // 日志时间戳（避免 slog 内部再次调用 time.Now）
 }
 
 func (e *logEntry) Reset() {
@@ -75,11 +208,21 @@ func (e *logEntry) Reset() {
 	e.msg = ""
 	e.args = nil
 	e.hooks = nil
+	e.ts = time.Time{}
 }
 
-// --- ringBuffer 环形缓冲区 ---
+// --- ringBuffer 分片环形缓冲区 ---
 
+// ringBuffer 分片设计：每个 worker 拥有一个独立 shard
+// 生产者通过 round-robin 选择 shard，单 shard 仅多生产者单消费者（MPSC）
+// MPSC 下 mutex 临界区最小化（仅 head/tail 推进），低竞争时性能优于无锁 CAS 链
 type ringBuffer struct {
+	shards []*rbShard
+	next   atomic.Uint64 // round-robin 计数器
+	ns     int           // shard 数量
+}
+
+type rbShard struct {
 	buf  []*logEntry
 	cap  uint64
 	mask uint64
@@ -87,15 +230,19 @@ type ringBuffer struct {
 	tail uint64
 	mu   sync.Mutex
 	drop atomic.Int64
+	_    [40]byte // cache line padding，防止 false sharing
 }
 
 func newRingBuffer(capacity int) *ringBuffer {
+	return newShardedRingBuffer(capacity, 0)
+}
+
+func newShardedRingBuffer(capacity, shards int) *ringBuffer {
 	c := uint64(capacity)
 	if c < 1024 {
 		c = 1024
 	}
-	// 向上取整到2的幂
-	if c&(c-1) != 0 {
+	if c&(c-1) != 0 { // 向上取整到2的幂
 		c--
 		c |= c >> 1
 		c |= c >> 2
@@ -104,39 +251,100 @@ func newRingBuffer(capacity int) *ringBuffer {
 		c |= c >> 16
 		c++
 	}
-	return &ringBuffer{
-		buf:  make([]*logEntry, c),
-		cap:  c,
-		mask: c - 1,
+	if shards <= 0 {
+		shards = 1
 	}
+	perShard := c / uint64(shards)
+	if perShard < 256 {
+		perShard = 256
+	}
+	if perShard&(perShard-1) != 0 {
+		perShard--
+		perShard |= perShard >> 1
+		perShard |= perShard >> 2
+		perShard |= perShard >> 4
+		perShard |= perShard >> 8
+		perShard |= perShard >> 16
+		perShard++
+	}
+	rb := &ringBuffer{ns: shards}
+	rb.shards = make([]*rbShard, shards)
+	for i := 0; i < shards; i++ {
+		rb.shards[i] = &rbShard{
+			buf:  make([]*logEntry, perShard),
+			cap:  perShard,
+			mask: perShard - 1,
+		}
+	}
+	return rb
 }
 
 func (rb *ringBuffer) Push(entry *logEntry) bool {
-	rb.mu.Lock()
-	if rb.tail-rb.head >= rb.cap {
-		rb.drop.Add(1)
-		rb.mu.Unlock()
+	if rb.ns <= 1 {
+		return rb.shards[0].push(entry)
+	}
+	// round-robin 选 shard，减少单 shard 锁竞争
+	idx := rb.next.Add(1) % uint64(rb.ns)
+	return rb.shards[idx].push(entry)
+}
+
+func (s *rbShard) push(entry *logEntry) bool {
+	s.mu.Lock()
+	if s.tail-s.head >= s.cap {
+		s.drop.Add(1)
+		s.mu.Unlock()
 		return false
 	}
-	rb.buf[rb.tail&rb.mask] = entry
-	rb.tail++
-	rb.mu.Unlock()
+	s.buf[s.tail&s.mask] = entry
+	s.tail++
+	s.mu.Unlock()
 	return true
 }
 
-func (rb *ringBuffer) Pop() *logEntry {
-	rb.mu.Lock()
-	if rb.head >= rb.tail {
-		rb.mu.Unlock()
+// Pop 从指定 shard 弹出（worker i 消费 shard i）
+func (rb *ringBuffer) Pop(shardIdx int) *logEntry {
+	if shardIdx < 0 || shardIdx >= rb.ns {
 		return nil
 	}
-	entry := rb.buf[rb.head&rb.mask]
-	rb.head++
-	rb.mu.Unlock()
+	return rb.shards[shardIdx].pop()
+}
+
+func (s *rbShard) pop() *logEntry {
+	s.mu.Lock()
+	if s.head >= s.tail {
+		s.mu.Unlock()
+		return nil
+	}
+	entry := s.buf[s.head&s.mask]
+	s.head++
+	s.mu.Unlock()
 	return entry
 }
 
-func (rb *ringBuffer) Dropped() int64 { return rb.drop.Load() }
+// PopBatch 批量弹出（减少锁次数）：单消费者，连续推进 head
+func (rb *ringBuffer) PopBatch(shardIdx int, batch []*logEntry) int {
+	if shardIdx < 0 || shardIdx >= rb.ns {
+		return 0
+	}
+	s := rb.shards[shardIdx]
+	s.mu.Lock()
+	n := 0
+	for n < len(batch) && s.head < s.tail {
+		batch[n] = s.buf[s.head&s.mask]
+		s.head++
+		n++
+	}
+	s.mu.Unlock()
+	return n
+}
+
+func (rb *ringBuffer) Dropped() int64 {
+	var total int64
+	for _, s := range rb.shards {
+		total += s.drop.Load()
+	}
+	return total
+}
 
 // --- batchWriter 批量写入器 ---
 
@@ -357,10 +565,11 @@ func (hw *httpWriter) Close() error {
 
 type SLogger struct {
 	logger        *slog.Logger
+	handler       slog.Handler // 缓存：避免每次 log 都调 l.logger.Handler()
 	hooks         []Hook
 	fileLogger    *lumberjack.Logger
-	level         atomic.Int32
-	levelVar      slog.LevelVar // 用于TextHandler动态级别
+	level         *atomic.Int32  // 指针：With/WithContext 派生 logger 共享同一级别
+	levelVar      *slog.LevelVar // 指针：TextHandler 动态级别共享
 	ringBuf       *ringBuffer
 	batchWriter   *batchWriter
 	networkWriter io.WriteCloser
@@ -368,15 +577,20 @@ type SLogger struct {
 	workers       []*worker
 	wg            *sync.WaitGroup
 	usePool       bool
+	asyncEnabled  bool      // 是否启用异步模式
+	lockFree      bool      // 是否启用无锁优化
+	prealloc      bool      // 是否启用预分配
+	syncOnce      sync.Once // 保证 Sync 只执行一次关闭逻辑，消除并发双关闭竞态
 }
 
 // --- worker ---
 
 type worker struct {
-	id     int
-	logger *SLogger
-	stopCh chan struct{}
-	wg     *sync.WaitGroup
+	id       int
+	logger   *SLogger
+	stopCh   chan struct{}
+	wg       *sync.WaitGroup
+	stopOnce sync.Once // 保证 close(stopCh) 只执行一次，消除双关闭竞态
 }
 
 func (w *worker) start() {
@@ -386,11 +600,12 @@ func (w *worker) start() {
 
 func (w *worker) run() {
 	defer func() {
-		if w.wg != nil {
-			w.wg.Done()
-		}
+		// 先 recover 原始 panic，再 Done；若 Done 自身异常也能被外层 defer 兜底
 		if r := recover(); r != nil {
 			fmt.Fprintf(os.Stderr, "[treasure-slog] worker %d panic recovered: %v\n", w.id, r)
+		}
+		if w.wg != nil {
+			w.wg.Done()
 		}
 	}()
 
@@ -420,29 +635,40 @@ func (w *worker) run() {
 			case <-w.stopCh:
 				return
 			default:
-				time.Sleep(time.Millisecond)
+				runtime.Gosched()
 				continue
 			}
 		}
 
 		processed := false
-		for i := 0; i < 256; i++ {
-			entry := w.logger.ringBuf.Pop()
-			if entry == nil {
-				break
-			}
-			batch = append(batch, entry)
-			processed = true
-			if len(batch) >= batchSize {
-				w.processBatch(batch)
-				batch = batch[:0]
+		// 批量弹出：从 batch 末尾追加，避免覆盖未处理的条目
+		if cap(batch) > 0 && len(batch) < cap(batch) {
+			n := w.logger.ringBuf.PopBatch(w.id, batch[len(batch):cap(batch)])
+			if n > 0 {
+				batch = batch[:len(batch)+n]
+				processed = true
+				if len(batch) >= batchSize {
+					w.processBatch(batch)
+					batch = batch[:0]
+				}
 			}
 		}
 
 		select {
 		case <-w.stopCh:
+			// 先处理已弹出到 batch 但未达批量的条目
 			if len(batch) > 0 {
 				w.processBatch(batch)
+				batch = batch[:0]
+			}
+			// 排空本 shard 的剩余条目
+			for {
+				n := w.logger.ringBuf.PopBatch(w.id, batch[:cap(batch)])
+				if n == 0 {
+					break
+				}
+				w.processBatch(batch[:n])
+				batch = batch[:0]
 			}
 			return
 		case <-ticker.C:
@@ -452,7 +678,8 @@ func (w *worker) run() {
 			}
 		default:
 			if !processed {
-				time.Sleep(100 * time.Nanosecond)
+				// 空闲时让出 CPU 给其他 goroutine（避免 time.Sleep 在 Windows 上的 ms 级精度损失）
+				runtime.Gosched()
 			}
 		}
 	}
@@ -464,6 +691,9 @@ func (w *worker) processBatch(batch []*logEntry) {
 			fmt.Fprintf(os.Stderr, "[treasure-slog] processBatch panic recovered: %v\n", r)
 		}
 	}()
+	endBatch := timing.startTimer(&timing.batchProcessNS)
+	defer endBatch()
+	timing.batchProcessed.Add(1)
 	if w.logger == nil {
 		return
 	}
@@ -480,12 +710,9 @@ func (w *worker) processBatch(batch []*logEntry) {
 }
 
 func (w *worker) stop() {
-	select {
-	case <-w.stopCh:
-		// already closed
-	default:
+	w.stopOnce.Do(func() {
 		close(w.stopCh)
-	}
+	})
 }
 
 // --- 全局实例 ---
@@ -494,6 +721,38 @@ var (
 	globalLogger Logger
 	once         sync.Once
 )
+
+func init() {
+	// 解析 --config 命令行参数，自动初始化全局 logger
+	if configPath := parseConfigFlag(); configPath != "" {
+		if l, err := New(configPath); err == nil {
+			globalLogger = l
+		}
+	}
+}
+
+// parseConfigFlag 解析 --config 命令行参数
+func parseConfigFlag() string {
+	for i := 1; i < len(os.Args); i++ {
+		arg := os.Args[i]
+		if arg == "--config" || arg == "-config" {
+			if i+1 < len(os.Args) {
+				return os.Args[i+1]
+			}
+		}
+		if len(arg) > 9 && arg[:9] == "--config=" {
+			return arg[9:]
+		}
+		if len(arg) > 8 && arg[:8] == "-config=" {
+			return arg[8:]
+		}
+	}
+	// 尝试默认配置文件
+	if _, err := os.Stat("configs/config.yaml"); err == nil {
+		return "configs/config.yaml"
+	}
+	return ""
+}
 
 // New 创建日志记录器
 func New(configPath string) (Logger, error) {
@@ -509,17 +768,35 @@ func New(configPath string) (Logger, error) {
 		}
 	}
 
+	// async.enabled 由 config.setDefaults 处理默认值
+	asyncEnabled := cfg.Log.Async.Enabled
+
 	slogger := &SLogger{
-		cfg:     cfg,
-		hooks:   []Hook{},
-		wg:      &sync.WaitGroup{},
-		usePool: cfg.Log.Performance.UsePool,
+		cfg:          cfg,
+		hooks:        []Hook{},
+		wg:           &sync.WaitGroup{},
+		usePool:      cfg.Log.Performance.UsePool,
+		asyncEnabled: asyncEnabled,
+		lockFree:     cfg.Log.Performance.LockFree,
+		prealloc:     cfg.Log.Performance.Prealloc,
+		level:        &atomic.Int32{},
+		levelVar:     &slog.LevelVar{},
 	}
 
 	slogger.SetLevel(cfg.Log.Level)
 
+	// 构建多输出 writer
 	writers := []io.Writer{}
-	if cfg.Log.Console.Enabled {
+
+	// 控制台输出：支持独立 format
+	// 当 console.format 与 log.format 不同时，控制台使用独立 handler
+	consoleFormat := cfg.Log.Console.Format
+	if consoleFormat == "" {
+		consoleFormat = cfg.Log.Format // 默认与主格式一致
+	}
+	consoleIndependent := cfg.Log.Console.Enabled && consoleFormat != cfg.Log.Format
+
+	if cfg.Log.Console.Enabled && !consoleIndependent {
 		writers = append(writers, os.Stdout)
 	}
 	if cfg.Log.File.Enabled {
@@ -558,24 +835,49 @@ func New(configPath string) (Logger, error) {
 		writer = io.Discard
 	}
 
-	slogger.batchWriter = newBatchWriter(writer, cfg.Log.Async.BatchSize,
-		time.Duration(cfg.Log.Async.FlushInterval)*time.Millisecond)
-	writer = slogger.batchWriter
+	// batchWriter 仅在异步模式下使用
+	if asyncEnabled {
+		slogger.batchWriter = newBatchWriter(writer, cfg.Log.Async.BatchSize,
+			time.Duration(cfg.Log.Async.FlushInterval)*time.Millisecond)
+		writer = slogger.batchWriter
+	}
 
+	// 创建主 handler
 	handler := slogger.createHandler(writer)
+
+	// 控制台独立格式：当 console.format 与 log.format 不同时，创建独立控制台 handler
+	if consoleIndependent {
+		consoleWriter := newBatchWriter(os.Stdout, cfg.Log.Async.BatchSize,
+			time.Duration(cfg.Log.Async.FlushInterval)*time.Millisecond)
+		consoleHandler := slogger.createConsoleHandler(consoleWriter, consoleFormat)
+		handler = newMultiHandler(handler, consoleHandler)
+	}
+
 	slogger.logger = slog.New(handler)
+	slogger.handler = handler // 缓存 handler，processEntry 可直接调用
 
-	slogger.ringBuf = newRingBuffer(cfg.Log.Async.BufferSize)
-
-	slogger.workers = make([]*worker, cfg.Log.Async.Workers)
-	for i := 0; i < cfg.Log.Async.Workers; i++ {
-		slogger.workers[i] = &worker{
-			id:     i,
-			logger: slogger,
-			stopCh: make(chan struct{}),
-			wg:     slogger.wg,
+	// 异步模式：创建环形缓冲区和工作线程
+	if asyncEnabled {
+		bufSize := cfg.Log.Async.BufferSize
+		if slogger.prealloc {
+			bufSize = bufSize * 2
 		}
-		slogger.workers[i].start()
+		workerCount := cfg.Log.Async.Workers
+		if slogger.lockFree && workerCount < 4 {
+			workerCount = 4
+		}
+		// 分片环形缓冲区：shard 数 = worker 数，每 worker 独占一个 shard
+		slogger.ringBuf = newShardedRingBuffer(bufSize, workerCount)
+		slogger.workers = make([]*worker, workerCount)
+		for i := 0; i < workerCount; i++ {
+			slogger.workers[i] = &worker{
+				id:     i,
+				logger: slogger,
+				stopCh: make(chan struct{}),
+				wg:     slogger.wg,
+			}
+			slogger.workers[i].start()
+		}
 	}
 
 	once.Do(func() { globalLogger = slogger })
@@ -588,7 +890,7 @@ func (l *SLogger) createHandler(writer io.Writer) slog.Handler {
 	case "console", "text":
 		l.levelVar.Set(slog.Level(l.level.Load()))
 		handler = slog.NewTextHandler(writer, &slog.HandlerOptions{
-			Level: &l.levelVar,
+			Level: l.levelVar,
 			ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
 				if a.Key == slog.TimeKey {
 					if t, ok := a.Value.Any().(time.Time); ok {
@@ -599,7 +901,7 @@ func (l *SLogger) createHandler(writer io.Writer) slog.Handler {
 			},
 		})
 	default:
-		handler = NewFastHandler(writer, &l.level)
+		handler = NewFastHandler(writer, l.level)
 	}
 
 	if l.cfg.Log.Sampling.Enabled {
@@ -609,6 +911,76 @@ func (l *SLogger) createHandler(writer io.Writer) slog.Handler {
 		})
 	}
 	return handler
+}
+
+// createConsoleHandler 创建控制台专用 handler，支持独立格式
+func (l *SLogger) createConsoleHandler(writer io.Writer, format string) slog.Handler {
+	switch format {
+	case "json":
+		return NewFastHandler(writer, l.level)
+	case "console", "text":
+		l.levelVar.Set(slog.Level(l.level.Load()))
+		return slog.NewTextHandler(writer, &slog.HandlerOptions{
+			Level: l.levelVar,
+			ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+				if a.Key == slog.TimeKey {
+					if t, ok := a.Value.Any().(time.Time); ok {
+						a.Value = slog.StringValue(t.Format(time.RFC3339Nano))
+					}
+				}
+				return a
+			},
+		})
+	default:
+		return NewFastHandler(writer, l.level)
+	}
+}
+
+// --- multiHandler 多handler分发 ---
+
+type multiHandler struct {
+	handlers []slog.Handler
+}
+
+func newMultiHandler(handlers ...slog.Handler) slog.Handler {
+	return &multiHandler{handlers: handlers}
+}
+
+func (h *multiHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	for _, handler := range h.handlers {
+		if handler.Enabled(ctx, level) {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *multiHandler) Handle(ctx context.Context, r slog.Record) error {
+	for _, handler := range h.handlers {
+		if !handler.Enabled(ctx, r.Level) {
+			continue
+		}
+		if err := handler.Handle(ctx, r.Clone()); err != nil {
+			fmt.Fprintf(os.Stderr, "[treasure-slog] multiHandler Handle error: %v\n", err)
+		}
+	}
+	return nil
+}
+
+func (h *multiHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	newHandlers := make([]slog.Handler, len(h.handlers))
+	for i, handler := range h.handlers {
+		newHandlers[i] = handler.WithAttrs(attrs)
+	}
+	return &multiHandler{handlers: newHandlers}
+}
+
+func (h *multiHandler) WithGroup(name string) slog.Handler {
+	newHandlers := make([]slog.Handler, len(h.handlers))
+	for i, handler := range h.handlers {
+		newHandlers[i] = handler.WithGroup(name)
+	}
+	return &multiHandler{handlers: newHandlers}
 }
 
 // --- 核心日志方法 ---
@@ -630,27 +1002,50 @@ func (l *SLogger) log(ctx context.Context, level slog.Level, msg string, args ..
 		return
 	}
 
-	// 全局recover保护
-	defer func() {
-		if r := recover(); r != nil {
-			fmt.Fprintf(os.Stderr, "[treasure-slog] log panic recovered: %v\n", r)
-		}
-	}()
-
-	// 级别过滤
-	currentLevel := slog.Level(l.level.Load())
+	// 级别过滤（热路径：先过滤再进 defer，避免无谓 defer 开销）
+	var currentLevel slog.Level
+	if l.level != nil {
+		currentLevel = slog.Level(l.level.Load())
+	}
 	if currentLevel == 0 {
 		currentLevel = slog.LevelInfo
 	}
 	if level < currentLevel {
+		if timing.enabled.Load() {
+			timing.logFiltered.Add(1)
+			timing.logCalls.Add(1)
+		}
 		return
 	}
 
-	// 获取日志条目
+	// 合并 defer：timing + recover，减少 defer 开销
+	endTotal := timing.startTimer(&timing.logTotalNS)
+	defer func() {
+		endTotal()
+		if r := recover(); r != nil {
+			fmt.Fprintf(os.Stderr, "[treasure-slog] log panic recovered: %v\n", r)
+		}
+	}()
+	if timing.enabled.Load() {
+		timing.logCalls.Add(1)
+	}
+
+	// 同步模式：直接处理，不走环形缓冲区
+	if !l.asyncEnabled || l.ringBuf == nil {
+		if timing.enabled.Load() {
+			timing.logSyncPath.Add(1)
+		}
+		l.processEntryDirect(ctx, level, msg, args)
+		return
+	}
+
+	// 异步模式：获取日志条目，推入环形缓冲区
 	var entry *logEntry
-	if v := logEntryPool.Get(); v != nil {
-		if e, ok := v.(*logEntry); ok {
-			entry = e
+	if l.usePool {
+		if v := logEntryPool.Get(); v != nil {
+			if e, ok := v.(*logEntry); ok {
+				entry = e
+			}
 		}
 	}
 	if entry == nil {
@@ -660,20 +1055,107 @@ func (l *SLogger) log(ctx context.Context, level slog.Level, msg string, args ..
 	entry.msg = msg
 	entry.level = level
 	entry.ctx = ctx
-	entry.args = safeArgs(args)
-	entry.hooks = l.hooks
-
-	// 异步写入
-	if l.ringBuf != nil {
-		if !l.ringBuf.Push(entry) {
-			l.processEntry(entry)
-			entry.Reset()
-			logEntryPool.Put(entry)
-		}
+	// 内联 safeArgs：偶数参数直接赋值（避免函数调用开销与堆分配）
+	if len(args)%2 == 0 {
+		entry.args = args
 	} else {
+		entry.args = safeArgs(args)
+	}
+	entry.hooks = l.hooks
+	entry.ts = time.Now() // 生产者设置时间戳，worker 直接使用避免重复调用
+
+	pushed := l.ringBuf.Push(entry)
+	if timing.enabled.Load() {
+		timing.logAsyncPush.Add(1)
+	}
+
+	if !pushed {
+		// 缓冲区满：降级为同步处理
+		if timing.enabled.Load() {
+			timing.logFallback.Add(1)
+		}
 		l.processEntry(entry)
 		entry.Reset()
-		logEntryPool.Put(entry)
+		if l.usePool {
+			logEntryPool.Put(entry)
+		}
+	}
+}
+
+// processEntryDirect 同步模式直接处理日志（绕过 slog.Logger，直接调用 handler.Handle）
+func (l *SLogger) processEntryDirect(ctx context.Context, level slog.Level, msg string, args []any) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Fprintf(os.Stderr, "[treasure-slog] processEntryDirect panic recovered: %v\n", r)
+		}
+	}()
+
+	// 执行钩子
+	endHook := timing.startTimer(&timing.hookExecNS)
+	for _, hook := range l.hooks {
+		if hook == nil {
+			continue
+		}
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Fprintf(os.Stderr, "[treasure-slog] hook panic recovered: %v\n", r)
+				}
+			}()
+			levelStr := safeLevelString(level)
+			hook.Run(msg, levelStr, args...)
+		}()
+	}
+	endHook()
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	safeArgsVal := safeArgs(args)
+
+	// Error 级别追加堆栈
+	if level == slog.LevelError {
+		if l.cfg != nil && l.cfg.Log.Stacktrace.Enabled && l.shouldAddStacktrace(level) {
+			stackTrace := getStackTrace(l.cfg.Log.Stacktrace.Depth)
+			safeArgsVal = append(safeArgsVal, "stacktrace", stackTrace)
+		}
+	}
+
+	endSlogCall := timing.startTimer(&timing.slogCallNS)
+	timing.entriesHandled.Add(1)
+
+	// 直接调用 handler.Handle，绕过 slog.Logger 内部的 time.Now + Enabled 检查
+	record := slog.NewRecord(time.Now(), level, msg, 0)
+	record.Add(safeArgsVal...)
+	if l.handler != nil {
+		_ = l.handler.Handle(ctx, record)
+	} else {
+		_ = l.logger.Handler().Handle(ctx, record)
+	}
+	endSlogCall()
+}
+
+// shouldAddStacktrace 根据配置的 stacktrace.level 判断是否需要添加堆栈
+func (l *SLogger) shouldAddStacktrace(level slog.Level) bool {
+	if l.cfg == nil {
+		return true // 默认仅 error 级别
+	}
+	cfgLevel := l.cfg.Log.Stacktrace.Level
+	if cfgLevel == "" {
+		return level >= slog.LevelError // 默认仅 error
+	}
+	switch cfgLevel {
+	case "debug":
+		return level >= slog.LevelDebug
+	case "info":
+		return level >= slog.LevelInfo
+	case "warn":
+		return level >= slog.LevelWarn
+	case "error":
+		return level >= slog.LevelError
+	default:
+		return level >= slog.LevelError
 	}
 }
 
@@ -682,6 +1164,10 @@ func (l *SLogger) processEntry(entry *logEntry) {
 		return
 	}
 
+	endProc := timing.startTimer(&timing.asyncProcessNS)
+	defer endProc()
+	timing.entriesHandled.Add(1)
+
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Fprintf(os.Stderr, "[treasure-slog] processEntry panic recovered: %v\n", r)
@@ -689,6 +1175,7 @@ func (l *SLogger) processEntry(entry *logEntry) {
 	}()
 
 	// 执行钩子
+	endHook := timing.startTimer(&timing.hookExecNS)
 	for _, hook := range entry.hooks {
 		if hook == nil {
 			continue
@@ -703,6 +1190,7 @@ func (l *SLogger) processEntry(entry *logEntry) {
 			hook.Run(entry.msg, levelStr, entry.args...)
 		}()
 	}
+	endHook()
 
 	ctx := entry.ctx
 	if ctx == nil {
@@ -710,27 +1198,33 @@ func (l *SLogger) processEntry(entry *logEntry) {
 	}
 
 	args := entry.args
-	// 再次确保偶数对齐（hook可能修改args）
 	if len(args)%2 != 0 {
 		args = safeArgs(args)
 	}
 
-	switch entry.level {
-	case slog.LevelDebug:
-		l.logger.DebugContext(ctx, entry.msg, args...)
-	case slog.LevelInfo:
-		l.logger.InfoContext(ctx, entry.msg, args...)
-	case slog.LevelWarn:
-		l.logger.WarnContext(ctx, entry.msg, args...)
-	case slog.LevelError:
-		if l.cfg != nil && l.cfg.Log.Stacktrace.Enabled {
+	// Error 级别追加堆栈
+	if entry.level == slog.LevelError {
+		if l.cfg != nil && l.cfg.Log.Stacktrace.Enabled && l.shouldAddStacktrace(entry.level) {
 			stackTrace := getStackTrace(l.cfg.Log.Stacktrace.Depth)
 			args = append(args, "stacktrace", stackTrace)
 		}
-		l.logger.ErrorContext(ctx, entry.msg, args...)
-	default:
-		l.logger.InfoContext(ctx, entry.msg, args...)
 	}
+
+	endSlogCall := timing.startTimer(&timing.slogCallNS)
+
+	// 直接调用 handler.Handle，使用 entry.ts 避免重复 time.Now
+	ts := entry.ts
+	if ts.IsZero() {
+		ts = time.Now()
+	}
+	record := slog.NewRecord(ts, entry.level, entry.msg, 0)
+	record.Add(args...)
+	if l.handler != nil {
+		_ = l.handler.Handle(ctx, record)
+	} else {
+		_ = l.logger.Handler().Handle(ctx, record)
+	}
+	endSlogCall()
 }
 
 // safeLevelString 安全获取level字符串
@@ -788,8 +1282,10 @@ func (l *SLogger) With(args ...any) Logger {
 			fmt.Fprintf(os.Stderr, "[treasure-slog] With panic recovered: %v\n", r)
 		}
 	}()
-	return &SLogger{
-		logger:        l.logger.With(safeArgs(args)...),
+	newSlogLogger := l.logger.With(safeArgs(args)...)
+	newLogger := &SLogger{
+		logger:        newSlogLogger,
+		handler:       newSlogLogger.Handler(), // 关键：用带新属性的 handler，否则 With 的字段会丢失
 		hooks:         l.hooks,
 		fileLogger:    l.fileLogger,
 		level:         l.level,
@@ -801,7 +1297,11 @@ func (l *SLogger) With(args ...any) Logger {
 		workers:       l.workers,
 		wg:            l.wg,
 		usePool:       l.usePool,
+		asyncEnabled:  l.asyncEnabled,
+		lockFree:      l.lockFree,
+		prealloc:      l.prealloc,
 	}
+	return newLogger
 }
 
 func (l *SLogger) WithContext(ctx context.Context) Logger {
@@ -817,6 +1317,7 @@ func (l *SLogger) WithContext(ctx context.Context) Logger {
 	newLogger := l.logger.With(safeArgs(args)...)
 	return &SLogger{
 		logger:        newLogger,
+		handler:       newLogger.Handler(),
 		hooks:         l.hooks,
 		fileLogger:    l.fileLogger,
 		level:         l.level,
@@ -828,6 +1329,9 @@ func (l *SLogger) WithContext(ctx context.Context) Logger {
 		workers:       l.workers,
 		wg:            l.wg,
 		usePool:       l.usePool,
+		asyncEnabled:  l.asyncEnabled,
+		lockFree:      l.lockFree,
+		prealloc:      l.prealloc,
 	}
 }
 
@@ -855,11 +1359,15 @@ func (l *SLogger) AddHook(hook Hook) Logger {
 	if l == nil {
 		return l
 	}
+	if hook == nil {
+		return l // 忽略 nil hook，避免后续遍历无意义
+	}
 	newHooks := make([]Hook, len(l.hooks)+1)
 	copy(newHooks, l.hooks)
 	newHooks[len(l.hooks)] = hook
 	return &SLogger{
 		logger:        l.logger,
+		handler:       l.handler,
 		hooks:         newHooks,
 		fileLogger:    l.fileLogger,
 		level:         l.level,
@@ -871,11 +1379,14 @@ func (l *SLogger) AddHook(hook Hook) Logger {
 		workers:       l.workers,
 		wg:            l.wg,
 		usePool:       l.usePool,
+		asyncEnabled:  l.asyncEnabled,
+		lockFree:      l.lockFree,
+		prealloc:      l.prealloc,
 	}
 }
 
 func (l *SLogger) SetLevel(level string) {
-	if l == nil {
+	if l == nil || l.level == nil {
 		return
 	}
 	defer func() {
@@ -898,13 +1409,13 @@ func (l *SLogger) SetLevel(level string) {
 	}
 	l.level.Store(int32(slogLevel))
 	l.levelVar.Set(slogLevel)
-	// FastHandler 通过 &l.level 引用动态感知变化
-	// TextHandler 通过 &l.levelVar 引用动态感知变化
-	// 无需重建 handler
+	// FastHandler 通过 l.level 指针引用动态感知变化
+	// TextHandler 通过 l.levelVar 指针引用动态感知变化
+	// With/WithContext 派生的 logger 共享同一指针，级别变更全链路生效
 }
 
 func (l *SLogger) GetLevel() string {
-	if l == nil {
+	if l == nil || l.level == nil {
 		return "info"
 	}
 	level := slog.Level(l.level.Load())
@@ -931,7 +1442,8 @@ func (l *SLogger) Sync() error {
 			fmt.Fprintf(os.Stderr, "[treasure-slog] Sync panic recovered: %v\n", r)
 		}
 	}()
-	if l.workers != nil {
+	l.syncOnce.Do(func() {
+		// workers 字段只在 Sync 中置 nil，配合 sync.Once 保证并发 Sync 只执行一次
 		for _, w := range l.workers {
 			if w != nil {
 				w.stop()
@@ -941,16 +1453,16 @@ func (l *SLogger) Sync() error {
 			l.wg.Wait()
 		}
 		l.workers = nil
-	}
-	if l.batchWriter != nil {
-		l.batchWriter.Close()
-	}
-	if l.fileLogger != nil {
-		l.fileLogger.Close()
-	}
-	if l.networkWriter != nil {
-		l.networkWriter.Close()
-	}
+		if l.batchWriter != nil {
+			l.batchWriter.Close()
+		}
+		if l.fileLogger != nil {
+			l.fileLogger.Close()
+		}
+		if l.networkWriter != nil {
+			l.networkWriter.Close()
+		}
+	})
 	return nil
 }
 
