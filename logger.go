@@ -628,14 +628,19 @@ func (w *worker) run() {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
+	// 空闲退避计数：连续无数据时逐步降低轮询频率，避免 Gosched 忙等烧 CPU
+	idleSpin := 0
+
 	for {
 		// 安全检查
 		if w.logger == nil || w.logger.ringBuf == nil {
 			select {
 			case <-w.stopCh:
 				return
+			case <-ticker.C:
+				continue
 			default:
-				runtime.Gosched()
+				time.Sleep(200 * time.Microsecond)
 				continue
 			}
 		}
@@ -647,6 +652,7 @@ func (w *worker) run() {
 			if n > 0 {
 				batch = batch[:len(batch)+n]
 				processed = true
+				idleSpin = 0
 				if len(batch) >= batchSize {
 					w.processBatch(batch)
 					batch = batch[:0]
@@ -678,8 +684,22 @@ func (w *worker) run() {
 			}
 		default:
 			if !processed {
-				// 空闲时让出 CPU 给其他 goroutine（避免 time.Sleep 在 Windows 上的 ms 级精度损失）
-				runtime.Gosched()
+				// 空闲退避：先短暂 Gosched，随后逐步加大睡眠粒度。
+				// 最坏 500us 的出队延迟远小于 flushInterval（默认 10~50ms），可忽略；
+				// 却能把空闲 CPU 从整核自旋降到接近 0。
+				idleSpin++
+				switch {
+				case idleSpin < 32:
+					runtime.Gosched()
+				case idleSpin < 256:
+					time.Sleep(50 * time.Microsecond)
+				case idleSpin < 4096:
+					time.Sleep(500 * time.Microsecond)
+				default:
+					// 深度空闲：即使睡到 2ms，ticker.C 兜底路径也能保证
+					// 条目最迟在 flush_interval 内被处理，延迟无感知
+					time.Sleep(2 * time.Millisecond)
+				}
 			}
 		}
 	}
