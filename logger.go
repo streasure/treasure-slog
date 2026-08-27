@@ -627,6 +627,8 @@ func (w *worker) run() {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
+	idleSpin := 0
+
 	for {
 		// 安全检查
 		if w.logger == nil || w.logger.ringBuf == nil {
@@ -635,33 +637,34 @@ func (w *worker) run() {
 				return
 			case <-ticker.C:
 				continue
-			}
-		}
-
-		// 尝试从 ring buffer 弹出条目
-		if cap(batch) > 0 && len(batch) < cap(batch) {
-			n := w.logger.ringBuf.PopBatch(w.id, batch[len(batch):cap(batch)])
-			if n > 0 {
-				batch = batch[:len(batch)+n]
-				// 批次满了立即处理，然后继续尝试弹出（不阻塞）
-				if len(batch) >= batchSize {
-					w.processBatch(batch)
-					batch = batch[:0]
-				}
+			default:
+				time.Sleep(200 * time.Microsecond)
 				continue
 			}
 		}
 
-		// 无数据时阻塞在 select，避免忙等烧 CPU
-		// ticker.C 保证即使无新数据也能定期处理残留 batch
+		// 尝试从 ring buffer 弹出条目
+		processed := false
+		if cap(batch) > 0 && len(batch) < cap(batch) {
+			n := w.logger.ringBuf.PopBatch(w.id, batch[len(batch):cap(batch)])
+			if n > 0 {
+				batch = batch[:len(batch)+n]
+				processed = true
+				idleSpin = 0
+				if len(batch) >= batchSize {
+					w.processBatch(batch)
+					batch = batch[:0]
+				}
+			}
+		}
+
+		// 非阻塞 select + 空闲退避：既保证延迟又避免 CPU 空转
 		select {
 		case <-w.stopCh:
-			// 先处理已弹出到 batch 但未达批量的条目
 			if len(batch) > 0 {
 				w.processBatch(batch)
 				batch = batch[:0]
 			}
-			// 排空本 shard 的剩余条目
 			for {
 				n := w.logger.ringBuf.PopBatch(w.id, batch[:cap(batch)])
 				if n == 0 {
@@ -675,6 +678,20 @@ func (w *worker) run() {
 			if len(batch) > 0 {
 				w.processBatch(batch)
 				batch = batch[:0]
+			}
+		default:
+			if !processed {
+				idleSpin++
+				switch {
+				case idleSpin < 32:
+					runtime.Gosched()
+				case idleSpin < 256:
+					time.Sleep(50 * time.Microsecond)
+				case idleSpin < 4096:
+					time.Sleep(500 * time.Microsecond)
+				default:
+					time.Sleep(2 * time.Millisecond)
+				}
 			}
 		}
 	}

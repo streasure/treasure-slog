@@ -4,6 +4,7 @@ package writer
 
 import (
 	"compress/gzip"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +14,8 @@ import (
 	"sync"
 	"time"
 )
+
+var errFileWriterClosed = errors.New("file writer closed")
 
 // FileWriterConfig 文件写入器配置
 type FileWriterConfig struct {
@@ -110,17 +113,18 @@ func (fw *FileWriter) openFile() error {
 }
 
 // Write 实现 io.Writer 接口
-// 写入前检查是否需要轮转，写入后更新字节计数并再次检查
+// 热路径：仅做大小检查（int64 比较），避免 time.Now 系统调用
+// 时间轮转由 background goroutine 的 ticker 处理
 func (fw *FileWriter) Write(p []byte) (n int, err error) {
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
 
 	if fw.closed {
-		return 0, fmt.Errorf("file writer closed")
+		return 0, errFileWriterClosed
 	}
 
-	// 写入前检查轮转
-	if fw.needRotate() {
+	// 写入前检查已经达到限制的文件。
+	if fw.needRotateBySize() {
 		if rotateErr := fw.rotate(); rotateErr != nil {
 			fmt.Fprintf(os.Stderr, "[tlog] rotate failed: %v\n", rotateErr)
 		}
@@ -129,8 +133,8 @@ func (fw *FileWriter) Write(p []byte) (n int, err error) {
 	n, err = fw.file.Write(p)
 	fw.currentSize += int64(n)
 
-	// 写入后检查轮转（处理单次写入超过 maxSize 的情况）
-	if fw.needRotate() {
+	// 写入后立即轮转，保持超过大小限制的单次写入也能触发轮转。
+	if fw.needRotateBySize() {
 		if rotateErr := fw.rotate(); rotateErr != nil {
 			fmt.Fprintf(os.Stderr, "[tlog] rotate failed: %v\n", rotateErr)
 		}
@@ -175,17 +179,19 @@ func (fw *FileWriter) Close() error {
 
 // --- 轮转逻辑 ---
 
-// needRotate 判断是否需要轮转
+// needRotate 判断是否需要轮转（完整检查：大小 + 时间，供 background goroutine 使用）
 func (fw *FileWriter) needRotate() bool {
-	// 按大小轮转
-	if fw.cfg.MaxSize > 0 && fw.currentSize >= fw.cfg.MaxSize {
-		return true
-	}
-	// 按时间轮转
-	if fw.cfg.Interval > 0 && time.Since(fw.createdAt) >= fw.cfg.Interval {
-		return true
-	}
-	return false
+	return fw.needRotateBySize() || fw.needRotateByTime()
+}
+
+// needRotateBySize 仅检查大小轮转（热路径使用，避免 time.Now 系统调用）
+func (fw *FileWriter) needRotateBySize() bool {
+	return fw.cfg.MaxSize > 0 && fw.currentSize >= fw.cfg.MaxSize
+}
+
+// needRotateByTime 仅检查时间轮转（供 background goroutine 使用）
+func (fw *FileWriter) needRotateByTime() bool {
+	return fw.cfg.Interval > 0 && time.Since(fw.createdAt) >= fw.cfg.Interval
 }
 
 // rotate 执行文件轮转

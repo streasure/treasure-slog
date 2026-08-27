@@ -13,10 +13,11 @@ import (
 // FastHandler 高性能JSON日志处理器，零反射序列化
 // 使用 *atomic.Int32 持有 level 引用，支持动态级别变更
 type FastHandler struct {
-	w        io.Writer
-	levelRef *atomic.Int32 // 指向 SLogger.level，动态感知级别变化
-	preAttrs []slog.Attr
-	groups   []string
+	w           io.Writer
+	levelRef    *atomic.Int32 // 指向 SLogger.level，动态感知级别变化
+	preAttrs    []slog.Attr
+	groups      []string
+	groupPrefix string // 缓存：避免每次 Handle() 重建
 }
 
 func NewFastHandler(w io.Writer, levelRef *atomic.Int32) *FastHandler {
@@ -77,14 +78,12 @@ func (h *FastHandler) Handle(_ context.Context, r slog.Record) error {
 		buf = append(buf, `","msg":`...)
 		buf = appendJSONString(buf, r.Message)
 
-		groupPrefix := buildGroupPrefix(h.groups)
-
 		for _, a := range h.preAttrs {
 			if a.Key == "" {
 				continue
 			}
 			buf = append(buf, `,"`...)
-			buf = append(buf, groupPrefix...)
+			buf = append(buf, h.groupPrefix...)
 			buf = append(buf, a.Key...)
 			buf = append(buf, `":`...)
 			buf = appendAttrValue(buf, a.Value)
@@ -95,7 +94,7 @@ func (h *FastHandler) Handle(_ context.Context, r slog.Record) error {
 				return true
 			}
 			buf = append(buf, `,"`...)
-			buf = append(buf, groupPrefix...)
+			buf = append(buf, h.groupPrefix...)
 			buf = append(buf, a.Key...)
 			buf = append(buf, `":`...)
 			buf = appendAttrValue(buf, a.Value)
@@ -115,13 +114,12 @@ func (h *FastHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	if len(attrs) == 0 {
 		return h
 	}
-	// If groups are active, existing preAttrs need to be prefixed with group names
 	var existingAttrs []slog.Attr
 	if len(h.groups) > 0 && len(h.preAttrs) > 0 {
-		groupPrefix := buildGroupPrefix(h.groups)
+		prefix := h.groupPrefix
 		existingAttrs = make([]slog.Attr, len(h.preAttrs))
 		for i, a := range h.preAttrs {
-			existingAttrs[i] = slog.Attr{Key: groupPrefix + a.Key, Value: a.Value}
+			existingAttrs[i] = slog.Attr{Key: prefix + a.Key, Value: a.Value}
 		}
 	} else {
 		existingAttrs = h.preAttrs
@@ -129,7 +127,7 @@ func (h *FastHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	newAttrs := make([]slog.Attr, len(existingAttrs)+len(attrs))
 	copy(newAttrs, existingAttrs)
 	copy(newAttrs[len(existingAttrs):], attrs)
-	return &FastHandler{w: h.w, levelRef: h.levelRef, preAttrs: newAttrs, groups: h.groups}
+	return &FastHandler{w: h.w, levelRef: h.levelRef, preAttrs: newAttrs, groups: h.groups, groupPrefix: h.groupPrefix}
 }
 
 func (h *FastHandler) WithGroup(name string) slog.Handler {
@@ -139,7 +137,7 @@ func (h *FastHandler) WithGroup(name string) slog.Handler {
 	newGroups := make([]string, len(h.groups)+1)
 	copy(newGroups, h.groups)
 	newGroups[len(h.groups)] = name
-	return &FastHandler{w: h.w, levelRef: h.levelRef, preAttrs: h.preAttrs, groups: newGroups}
+	return &FastHandler{w: h.w, levelRef: h.levelRef, preAttrs: h.preAttrs, groups: newGroups, groupPrefix: buildGroupPrefix(newGroups)}
 }
 
 // --- 序列化辅助函数 ---
