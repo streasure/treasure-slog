@@ -627,9 +627,6 @@ func (w *worker) run() {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	// 空闲退避计数：连续无数据时逐步降低轮询频率，避免 Gosched 忙等烧 CPU
-	idleSpin := 0
-
 	for {
 		// 安全检查
 		if w.logger == nil || w.logger.ringBuf == nil {
@@ -638,27 +635,25 @@ func (w *worker) run() {
 				return
 			case <-ticker.C:
 				continue
-			default:
-				time.Sleep(200 * time.Microsecond)
-				continue
 			}
 		}
 
-		processed := false
-		// 批量弹出：从 batch 末尾追加，避免覆盖未处理的条目
+		// 尝试从 ring buffer 弹出条目
 		if cap(batch) > 0 && len(batch) < cap(batch) {
 			n := w.logger.ringBuf.PopBatch(w.id, batch[len(batch):cap(batch)])
 			if n > 0 {
 				batch = batch[:len(batch)+n]
-				processed = true
-				idleSpin = 0
+				// 批次满了立即处理，然后继续尝试弹出（不阻塞）
 				if len(batch) >= batchSize {
 					w.processBatch(batch)
 					batch = batch[:0]
 				}
+				continue
 			}
 		}
 
+		// 无数据时阻塞在 select，避免忙等烧 CPU
+		// ticker.C 保证即使无新数据也能定期处理残留 batch
 		select {
 		case <-w.stopCh:
 			// 先处理已弹出到 batch 但未达批量的条目
@@ -680,25 +675,6 @@ func (w *worker) run() {
 			if len(batch) > 0 {
 				w.processBatch(batch)
 				batch = batch[:0]
-			}
-		default:
-			if !processed {
-				// 空闲退避：先短暂 Gosched，随后逐步加大睡眠粒度。
-				// 最坏 500us 的出队延迟远小于 flushInterval（默认 10~50ms），可忽略；
-				// 却能把空闲 CPU 从整核自旋降到接近 0。
-				idleSpin++
-				switch {
-				case idleSpin < 32:
-					runtime.Gosched()
-				case idleSpin < 256:
-					time.Sleep(50 * time.Microsecond)
-				case idleSpin < 4096:
-					time.Sleep(500 * time.Microsecond)
-				default:
-					// 深度空闲：即使睡到 2ms，ticker.C 兜底路径也能保证
-					// 条目最迟在 flush_interval 内被处理，延迟无感知
-					time.Sleep(2 * time.Millisecond)
-				}
 			}
 		}
 	}
