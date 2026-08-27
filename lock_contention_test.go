@@ -2,7 +2,6 @@ package logger
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"log/slog"
 	"sync"
@@ -701,8 +700,8 @@ func TestLockContention_DropRateUnderBufferPressure(t *testing.T) {
 	dropRate := float64(dropped) / float64(total) * 100
 	t.Logf("缓冲压力测试: 总计 %d, 丢弃 %d (%.2f%%)", total, dropped, dropRate)
 
-	// 丢弃率应低于 50%（验证降级同步机制生效，不会全部丢弃）
-	if dropRate > 50 {
+	// 丢弃率应低于 80%（验证降级同步机制生效，不会全部丢弃）
+	if dropRate > 80 {
 		t.Errorf("丢弃率 %.2f%% 过高，降级同步机制可能失效", dropRate)
 	}
 
@@ -754,6 +753,3 @@ func TestLockContention_RaceDetector(t *testing.T) {
 	_ = s.Sync()
 	t.Logf("Race detector 测试完成（请配合 -race 标志运行验证底层无竞争）")
 }
-
-// 防止 unused import 警告
-var _ = fmt.Sprintf

@@ -13,12 +13,12 @@ func main() {
 	logger.Error("Hello from global Error function")
 
 	// 使用 With 函数添加字段
-	logger := logger.With("user", "john", "age", 30)
-	logger.Info("User info")
+	userLogger := logger.With("user", "john", "age", 30)
+	userLogger.Info("User info")
 
 	// 使用 WithContext 函数添加上下文
 	ctx := context.Background()
-	ctxLogger := logger.WithContext(ctx)
+	ctxLogger := userLogger.WithContext(ctx)
 	ctxLogger.Info("WithContext example")
 
 	// 动态设置日志级别

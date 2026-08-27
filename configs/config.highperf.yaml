@@ -1,30 +1,29 @@
-# 高性能模式配置 - 用于极高吞吐量场景
 log:
   level: info
   format: json
   async:
     enabled: true
-    buffer_size: 2000000      # 2M 缓冲区
-    batch_size: 20000         # 2万批量处理
-    flush_interval: 1         # 1ms 刷新间隔
-    workers: 64               # 64 个工作线程
+    buffer_size: 1000000
+    batch_size: 2000
+    flush_interval: 10
+    workers: 16
   console:
-    enabled: false            # 禁用控制台输出以提升性能
+    enabled: false
   file:
     enabled: true
-    path: ./logs/highperf.log
+    path: ./logs/app.log
     rotate:
-      max_size: 1000          # 1GB 单文件
-      max_backups: 10
-      max_age: 30
-      compress: false         # 禁用压缩以提升性能
+      max_size: 500
+      max_backups: 30
+      max_age: 90
+      compress: true
   stacktrace:
-    enabled: false            # 禁用堆栈追踪以提升性能
-  sampling:
-    enabled: false            # 禁用采样以获取全量日志
-  field_cache:
     enabled: true
-    size: 100000
+    level: error
+  sampling:
+    enabled: true
+    initial: 100000
+    thereafter: 10000
   performance:
     lock_free: true
     use_pool: true

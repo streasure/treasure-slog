@@ -2,4 +2,3 @@
 *.log
 *.log.*
 logs/
-pkg/logger/logs/*

@@ -2,9 +2,4 @@ module github.com/streasure/treasure-slog
 
 go 1.22.5
 
-require (
-	gopkg.in/natefinch/lumberjack.v2 v2.2.1
-	gopkg.in/yaml.v3 v3.0.1
-)
-
-require github.com/natefinch/lumberjack v2.0.0+incompatible // indirect
+require gopkg.in/yaml.v3 v3.0.1

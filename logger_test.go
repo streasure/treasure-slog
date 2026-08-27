@@ -3,11 +3,11 @@ package logger
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 )
 
 func TestLogger(t *testing.T) {
-	// 创建不同级别的日志记录器
 	testCases := []struct {
 		level string
 		name  string
@@ -20,14 +20,9 @@ func TestLogger(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			// 临时修改配置文件
-			originalConfig, err := os.ReadFile("configs/config.yaml")
-			if err != nil {
-				t.Fatalf("Failed to read config file: %v", err)
-			}
-			defer os.WriteFile("configs/config.yaml", originalConfig, 0644)
+			tmpDir := t.TempDir()
+			configPath := filepath.Join(tmpDir, "config.yaml")
 
-			// 修改配置文件中的日志级别
 			configContent := `log:
   level: ` + tc.level + `
   format: json
@@ -39,30 +34,26 @@ func TestLogger(t *testing.T) {
   sampling:
     enabled: false
 `
-			err = os.WriteFile("configs/config.yaml", []byte(configContent), 0644)
-			if err != nil {
+			if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 				t.Fatalf("Failed to write config file: %v", err)
 			}
 
-			logger, err := New("configs/config.yaml")
+			logger, err := New(configPath)
 			if err != nil {
 				t.Fatalf("Failed to create logger: %v", err)
 			}
 
-			// 测试基本日志方法
 			logger.Debug("Debug message", "key1", "value1", "key2", 42)
 			logger.Info("Info message", "key1", "value1", "key2", 42)
 			logger.Warn("Warn message", "key1", "value1", "key2", 42)
 			logger.Error("Error message", "key1", "value1", "key2", 42)
 
-			// 测试 With 方法
 			withLogger := logger.With("context", "test")
 			withLogger.Debug("Debug message with context", "key", "value")
 			withLogger.Info("Info message with context", "key", "value")
 			withLogger.Warn("Warn message with context", "key", "value")
 			withLogger.Error("Error message with context", "key", "value")
 
-			// 测试 WithContext 方法
 			ctx := context.WithValue(context.Background(), "test-key", "test-value")
 			ctxLogger := logger.WithContext(ctx)
 			ctxLogger.Debug("Debug message with context object", "key", "value")
@@ -70,7 +61,6 @@ func TestLogger(t *testing.T) {
 			ctxLogger.Warn("Warn message with context object", "key", "value")
 			ctxLogger.Error("Error message with context object", "key", "value")
 
-			// 测试 Sync 方法
 			err = logger.Sync()
 			if err != nil {
 				t.Fatalf("Failed to sync logger: %v", err)
@@ -80,8 +70,24 @@ func TestLogger(t *testing.T) {
 }
 
 func TestLoggerWithDefaultLevel(t *testing.T) {
-	// 测试默认日志级别
-	logger, err := New("configs/config.yaml")
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	configContent := `log:
+  level: info
+  format: json
+  file:
+    enabled: false
+  stacktrace:
+    enabled: false
+  sampling:
+    enabled: false
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+
+	logger, err := New(configPath)
 	if err != nil {
 		t.Fatalf("Failed to create logger: %v", err)
 	}
@@ -89,41 +95,54 @@ func TestLoggerWithDefaultLevel(t *testing.T) {
 }
 
 func TestGlobalLogger(t *testing.T) {
-	// 测试全局日志函数
-	// 首先调用 New 初始化全局实例
-	logger, err := New("configs/config.yaml")
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	configContent := `log:
+  level: debug
+  format: json
+  file:
+    enabled: false
+  stacktrace:
+    enabled: false
+  sampling:
+    enabled: false
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+
+	originalGlobal := globalLogger
+	defer func() { globalLogger = originalGlobal }()
+
+	l, err := New(configPath)
 	if err != nil {
 		t.Fatalf("Failed to create logger: %v", err)
 	}
-	defer logger.Sync()
+	globalLogger = l
 
-	// 测试全局函数
 	Info("Global Info function", "key", "value")
 	Debug("Global Debug function", "key", "value")
 	Warn("Global Warn function", "key", "value")
 	Error("Global Error function", "key", "value")
 
-	// 测试全局 With 函数
 	withLogger := With("context", "test")
 	if withLogger != nil {
 		withLogger.Info("Global With function")
 	}
 
-	// 测试全局 WithContext 函数
 	ctx := context.Background()
 	ctxLogger := WithContext(ctx)
 	if ctxLogger != nil {
 		ctxLogger.Info("Global WithContext function")
 	}
 
-	// 测试全局 SetLevel 和 GetLevel 函数
 	SetLevel("debug")
 	level := GetLevel()
 	if level != "debug" {
 		t.Errorf("Expected level to be 'debug', got '%s'", level)
 	}
 
-	// 测试全局 Sync 函数
 	err = Sync()
 	if err != nil {
 		t.Errorf("Sync error: %v", err)
@@ -131,25 +150,38 @@ func TestGlobalLogger(t *testing.T) {
 }
 
 func TestPanicRecovery(t *testing.T) {
-	// 测试 Panic Recovery
 	defer func() {
 		if r := recover(); r != nil {
 			t.Logf("Recovered from panic: %v", r)
 		}
 	}()
 
-	// 触发 panic
 	panic("test panic")
 }
 
 func TestHookFunction(t *testing.T) {
-	// 测试 Hook 功能
-	logger, err := New("configs/config.yaml")
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	configContent := `log:
+  level: info
+  format: json
+  file:
+    enabled: false
+  stacktrace:
+    enabled: false
+  sampling:
+    enabled: false
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+
+	logger, err := New(configPath)
 	if err != nil {
 		t.Fatalf("Failed to create logger: %v", err)
 	}
 
-	// 创建一个测试 Hook
 	hookCalled := false
 	testHook := &TestHookImpl{
 		OnRun: func(msg string, level string, args ...any) {
@@ -158,52 +190,74 @@ func TestHookFunction(t *testing.T) {
 		},
 	}
 
-	// 添加 Hook
 	loggerWithHook := logger.AddHook(testHook)
-
-	// 记录日志，触发 Hook
 	loggerWithHook.Info("Test message", "key", "value")
 
-	// 等待异步日志处理完成
 	err = loggerWithHook.Sync()
 	if err != nil {
 		t.Fatalf("Failed to sync logger: %v", err)
 	}
 
-	// 验证 Hook 被调用
 	if !hookCalled {
 		t.Fatalf("Hook was not called")
 	}
 }
 
 func TestContextAutoInject(t *testing.T) {
-	// 测试 Context 自动注入功能
-	logger, err := New("configs/config.yaml")
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	configContent := `log:
+  level: info
+  format: json
+  file:
+    enabled: false
+  stacktrace:
+    enabled: false
+  sampling:
+    enabled: false
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+
+	logger, err := New(configPath)
 	if err != nil {
 		t.Fatalf("Failed to create logger: %v", err)
 	}
 
-	// 创建一个带有信息的 context
 	ctx := context.Background()
 	ctx = context.WithValue(ctx, "request_id", "test-request-id")
 	ctx = context.WithValue(ctx, "user_id", "test-user-id")
 	ctx = context.WithValue(ctx, "span_id", "test-span-id")
 
-	// 创建带有 context 的 logger
 	ctxLogger := logger.WithContext(ctx)
-
-	// 记录日志，验证 context 信息被注入
 	ctxLogger.Info("Test message with context")
 }
 
 func TestSync(t *testing.T) {
-	// 测试 Graceful Shutdown 功能
-	logger, err := New("configs/config.yaml")
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	configContent := `log:
+  level: info
+  format: json
+  file:
+    enabled: false
+  stacktrace:
+    enabled: false
+  sampling:
+    enabled: false
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+
+	logger, err := New(configPath)
 	if err != nil {
 		t.Fatalf("Failed to create logger: %v", err)
 	}
 
-	// 调用 Sync 方法
 	err = logger.Sync()
 	if err != nil {
 		t.Fatalf("Failed to sync logger: %v", err)

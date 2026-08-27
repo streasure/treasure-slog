@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strconv"
 	"sync/atomic"
 	"time"
 )
@@ -76,11 +77,14 @@ func (h *FastHandler) Handle(_ context.Context, r slog.Record) error {
 		buf = append(buf, `","msg":`...)
 		buf = appendJSONString(buf, r.Message)
 
+		groupPrefix := buildGroupPrefix(h.groups)
+
 		for _, a := range h.preAttrs {
 			if a.Key == "" {
 				continue
 			}
 			buf = append(buf, `,"`...)
+			buf = append(buf, groupPrefix...)
 			buf = append(buf, a.Key...)
 			buf = append(buf, `":`...)
 			buf = appendAttrValue(buf, a.Value)
@@ -91,6 +95,7 @@ func (h *FastHandler) Handle(_ context.Context, r slog.Record) error {
 				return true
 			}
 			buf = append(buf, `,"`...)
+			buf = append(buf, groupPrefix...)
 			buf = append(buf, a.Key...)
 			buf = append(buf, `":`...)
 			buf = appendAttrValue(buf, a.Value)
@@ -110,9 +115,20 @@ func (h *FastHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	if len(attrs) == 0 {
 		return h
 	}
-	newAttrs := make([]slog.Attr, len(h.preAttrs)+len(attrs))
-	copy(newAttrs, h.preAttrs)
-	copy(newAttrs[len(h.preAttrs):], attrs)
+	// If groups are active, existing preAttrs need to be prefixed with group names
+	var existingAttrs []slog.Attr
+	if len(h.groups) > 0 && len(h.preAttrs) > 0 {
+		groupPrefix := buildGroupPrefix(h.groups)
+		existingAttrs = make([]slog.Attr, len(h.preAttrs))
+		for i, a := range h.preAttrs {
+			existingAttrs[i] = slog.Attr{Key: groupPrefix + a.Key, Value: a.Value}
+		}
+	} else {
+		existingAttrs = h.preAttrs
+	}
+	newAttrs := make([]slog.Attr, len(existingAttrs)+len(attrs))
+	copy(newAttrs, existingAttrs)
+	copy(newAttrs[len(existingAttrs):], attrs)
 	return &FastHandler{w: h.w, levelRef: h.levelRef, preAttrs: newAttrs, groups: h.groups}
 }
 
@@ -127,6 +143,24 @@ func (h *FastHandler) WithGroup(name string) slog.Handler {
 }
 
 // --- 序列化辅助函数 ---
+
+// buildGroupPrefix builds a dot-separated prefix from group names.
+// Returns empty string if no groups, e.g. "grpc." or "grpc.server."
+func buildGroupPrefix(groups []string) string {
+	if len(groups) == 0 {
+		return ""
+	}
+	n := 0
+	for _, g := range groups {
+		n += len(g) + 1 // +1 for dot separator
+	}
+	b := make([]byte, 0, n)
+	for _, g := range groups {
+		b = append(b, g...)
+		b = append(b, '.')
+	}
+	return string(b)
+}
 
 func appendLevel(buf []byte, level slog.Level) []byte {
 	switch {
@@ -245,7 +279,7 @@ func appendUint(buf []byte, v uint64) []byte {
 }
 
 func appendFloat(buf []byte, f float64) []byte {
-	return append(buf, fmt.Sprintf("%g", f)...)
+	return append(buf, strconv.FormatFloat(f, 'g', -1, 64)...)
 }
 
 var _ slog.Handler = (*FastHandler)(nil)

@@ -18,9 +18,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"gopkg.in/natefinch/lumberjack.v2"
-
 	"github.com/streasure/treasure-slog/internal/config"
+	"github.com/streasure/treasure-slog/internal/writer"
 )
 
 // Hook 定义日志钩子接口
@@ -567,7 +566,7 @@ type SLogger struct {
 	logger        *slog.Logger
 	handler       slog.Handler // 缓存：避免每次 log 都调 l.logger.Handler()
 	hooks         []Hook
-	fileLogger    *lumberjack.Logger
+	fileLogger    *writer.FileWriter
 	level         *atomic.Int32  // 指针：With/WithContext 派生 logger 共享同一级别
 	levelVar      *slog.LevelVar // 指针：TextHandler 动态级别共享
 	ringBuf       *ringBuffer
@@ -742,6 +741,44 @@ var (
 	once         sync.Once
 )
 
+// exeDir 是启动时缓存的可执行文件所在目录，避免重复调用 os.Executable()
+var exeDir string
+
+// init caches the executable directory for path resolution
+func init() {
+	if path, err := os.Executable(); err == nil {
+		exeDir = filepath.Dir(path)
+	}
+}
+
+// resolveExistingPath 将相对路径解析为绝对路径，适用于已存在的文件（如配置文件）。
+// 优先基于 exe 所在目录解析，若文件不存在则 fallback 到基于当前工作目录的路径。
+func resolveExistingPath(p string) string {
+	if filepath.IsAbs(p) {
+		return p
+	}
+	if exeDir != "" {
+		abs := filepath.Join(exeDir, p)
+		if _, err := os.Stat(abs); err == nil {
+			return abs
+		}
+	}
+	return p
+}
+
+// resolvePath 将相对路径解析为绝对路径，适用于待创建的文件（如日志文件）。
+// 直接基于 exe 所在目录解析，无需检查文件是否存在。
+func resolvePath(p string) string {
+	if filepath.IsAbs(p) {
+		return p
+	}
+	if exeDir != "" {
+		return filepath.Join(exeDir, p)
+	}
+	return p
+}
+
+// init parses --config flag and initializes globalLogger (must run after exeDir init)
 func init() {
 	// 解析 --config 命令行参数，自动初始化全局 logger
 	if configPath := parseConfigFlag(); configPath != "" {
@@ -767,25 +804,18 @@ func parseConfigFlag() string {
 			return arg[8:]
 		}
 	}
-	// 尝试默认配置文件
-	if _, err := os.Stat("configs/config.yaml"); err == nil {
-		return "configs/config.yaml"
+	// 尝试默认配置文件（优先 exe 目录）
+	if _, err := os.Stat(resolveExistingPath("configs/config.yaml")); err == nil {
+		return resolveExistingPath("configs/config.yaml")
 	}
 	return ""
 }
 
 // New 创建日志记录器
 func New(configPath string) (Logger, error) {
-	cfg, err := config.LoadConfig(configPath)
+	cfg, err := config.LoadConfig(resolveExistingPath(configPath))
 	if err != nil {
 		return nil, fmt.Errorf("load config error: %w", err)
-	}
-
-	if cfg.Log.File.Enabled {
-		logDir := filepath.Dir(cfg.Log.File.Path)
-		if err := os.MkdirAll(logDir, 0755); err != nil {
-			return nil, fmt.Errorf("create log directory error: %w", err)
-		}
 	}
 
 	// async.enabled 由 config.setDefaults 处理默认值
@@ -820,15 +850,23 @@ func New(configPath string) (Logger, error) {
 		writers = append(writers, os.Stdout)
 	}
 	if cfg.Log.File.Enabled {
-		fl := &lumberjack.Logger{
-			Filename:   cfg.Log.File.Path,
-			MaxSize:    cfg.Log.File.Rotate.MaxSize,
-			MaxBackups: cfg.Log.File.Rotate.MaxBackups,
-			MaxAge:     cfg.Log.File.Rotate.MaxAge,
-			Compress:   cfg.Log.File.Rotate.Compress,
+		logPath := resolvePath(cfg.Log.File.Path)
+		cfg.Log.File.Path = logPath
+		fw, err := writer.NewFileWriter(writer.FileWriterConfig{
+			Dir:         filepath.Dir(logPath),
+			BaseName:    filepath.Base(logPath[:len(logPath)-len(filepath.Ext(logPath))]),
+			Ext:         filepath.Ext(logPath),
+			MaxSize:     int64(cfg.Log.File.Rotate.MaxSize) * 1024 * 1024, // MB -> bytes
+			MaxBackups:  cfg.Log.File.Rotate.MaxBackups,
+			MaxAge:      time.Duration(cfg.Log.File.Rotate.MaxAge) * 24 * time.Hour, // 天 -> duration
+			Compress:    cfg.Log.File.Rotate.Compress,
+			Interval:    cfg.Log.File.Rotate.Interval,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("create file writer error: %w", err)
 		}
-		slogger.fileLogger = fl
-		writers = append(writers, fl)
+		slogger.fileLogger = fw
+		writers = append(writers, fw)
 	}
 	if cfg.Log.Network.Enabled {
 		var nw io.WriteCloser
@@ -1249,9 +1287,6 @@ func (l *SLogger) processEntry(entry *logEntry) {
 
 // safeLevelString 安全获取level字符串
 func safeLevelString(level slog.Level) string {
-	defer func() {
-		recover()
-	}()
 	switch level {
 	case slog.LevelDebug:
 		return "DEBUG"

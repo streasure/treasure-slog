@@ -3,30 +3,24 @@ package logger
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 )
 
 func TestAllFeatures(t *testing.T) {
-	// 确保日志目录存在
-	logDir := "logs"
+	tmpDir := t.TempDir()
+	logDir := filepath.Join(tmpDir, "logs")
 	if err := os.MkdirAll(logDir, 0755); err != nil {
 		t.Fatalf("Failed to create log directory: %v", err)
 	}
 
-	// 临时修改配置文件，启用文件输出
-	originalConfig, err := os.ReadFile("configs/config.yaml")
-	if err != nil {
-		t.Fatalf("Failed to read config file: %v", err)
-	}
-	defer os.WriteFile("configs/config.yaml", originalConfig, 0644)
-
-	// 修改配置文件，启用文件输出
+	configPath := filepath.Join(tmpDir, "config.yaml")
 	configContent := `log:
   level: debug
   format: json
   file:
     enabled: true
-    path: ./logs/app.log
+    path: ` + filepath.Join(logDir, "app.log") + `
     rotate:
       max_size: 10
       max_backups: 5
@@ -39,25 +33,21 @@ func TestAllFeatures(t *testing.T) {
     initial: 100
     thereafter: 10
 `
-	err = os.WriteFile("configs/config.yaml", []byte(configContent), 0644)
-	if err != nil {
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("Failed to write config file: %v", err)
 	}
 
-	// 1. 测试基本日志功能
 	t.Log("=== Testing basic logging ===")
-	logger, err := New("configs/config.yaml")
+	logger, err := New(configPath)
 	if err != nil {
 		t.Fatalf("Failed to create logger: %v", err)
 	}
 
-	// 测试不同级别的日志
 	logger.Debug("Debug message", "key1", "value1", "key2", 42)
 	logger.Info("Info message", "key1", "value1", "key2", 42)
 	logger.Warn("Warn message", "key1", "value1", "key2", 42)
 	logger.Error("Error message", "key1", "value1", "key2", 42)
 
-	// 2. 测试 Hook 链
 	t.Log("=== Testing hook chain ===")
 	hookCalled := false
 	testHook := &TestHookImpl{
@@ -70,7 +60,6 @@ func TestAllFeatures(t *testing.T) {
 	loggerWithHook := logger.AddHook(testHook)
 	loggerWithHook.Info("Test message with hook", "key", "value")
 
-	// 等待异步日志处理完成
 	err = loggerWithHook.Sync()
 	if err != nil {
 		t.Fatalf("Failed to sync logger: %v", err)
@@ -80,7 +69,6 @@ func TestAllFeatures(t *testing.T) {
 		t.Fatalf("Hook was not called")
 	}
 
-	// 3. 测试 Context 自动注入
 	t.Log("=== Testing context auto-injection ===")
 	ctx := context.Background()
 	ctx = context.WithValue(ctx, "request_id", "test-request-id")
@@ -90,7 +78,6 @@ func TestAllFeatures(t *testing.T) {
 	ctxLogger := logger.WithContext(ctx)
 	ctxLogger.Info("Test message with context")
 
-	// 4. 测试 Panic Recovery
 	t.Log("=== Testing panic recovery ===")
 	func() {
 		defer func() {
@@ -99,11 +86,9 @@ func TestAllFeatures(t *testing.T) {
 			}
 		}()
 
-		// 触发 panic
 		panic("test panic")
 	}()
 
-	// 5. 测试 Graceful Shutdown
 	t.Log("=== Testing graceful shutdown ===")
 	err = logger.Sync()
 	if err != nil {

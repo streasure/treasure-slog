@@ -438,10 +438,3 @@ func TestRedirectFailure_MultiOutput(t *testing.T) {
 		t.Errorf("多输出 writer2 未输出")
 	}
 }
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -49,10 +50,11 @@ type FileConfig struct {
 
 // RotateConfig 轮转配置
 type RotateConfig struct {
-	MaxSize    int  `yaml:"max_size"`
-	MaxBackups int  `yaml:"max_backups"`
-	MaxAge     int  `yaml:"max_age"`
-	Compress   bool `yaml:"compress"`
+	MaxSize    int           `yaml:"max_size"`
+	MaxBackups int           `yaml:"max_backups"`
+	MaxAge     int           `yaml:"max_age"`
+	Compress   bool          `yaml:"compress"`
+	Interval   time.Duration `yaml:"interval"` // 时间轮转间隔（如 24h），0=禁用
 }
 
 // NetworkConfig 网络输出配置
@@ -79,13 +81,16 @@ type SamplingConfig struct {
 	Thereafter int  `yaml:"thereafter"`
 }
 
-// FieldCacheConfig 字段缓存配置
+// FieldCacheConfig 字段缓存配置（已废弃，保留用于向后兼容旧配置文件）
 type FieldCacheConfig struct {
 	Enabled bool `yaml:"enabled"`
 	Size    int  `yaml:"size"`
 }
 
 // PerformanceConfig 性能优化配置
+// LockFree: 启用时确保最少 4 个 worker，减少锁竞争（非真正无锁实现）
+// UsePool: 启用 sync.Pool 复用 logEntry 对象，减少 GC 压力
+// Prealloc: 启用时将 ring buffer 容量加倍，减少动态扩容开销
 type PerformanceConfig struct {
 	LockFree bool `yaml:"lock_free"`
 	UsePool  bool `yaml:"use_pool"`
