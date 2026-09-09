@@ -805,7 +805,9 @@ func parseConfigFlag() string {
 }
 
 // New 创建日志记录器
-func New(configPath string) (Logger, error) {
+// 返回具体类型 *SLogger（指针）：调用方持有具体类型可避免接口装箱，
+// 便于编译器内联/去虚化；*SLogger 完整实现了 Logger 接口，需要接口处可直接隐式转换
+func New(configPath string) (*SLogger, error) {
 	cfg, err := config.LoadConfig(resolveExistingPath(configPath))
 	if err != nil {
 		return nil, fmt.Errorf("load config error: %w", err)
