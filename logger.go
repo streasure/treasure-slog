@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -734,11 +735,55 @@ var (
 	once         sync.Once
 )
 
+// resolveLogPath 解析 log.file.path 为绝对路径
+// 规则：
+//  1. 绝对路径：原样使用
+//  2. 相对路径：基于进程工作目录（即调用工程所在目录）解析
+//  3. 以下情况直接报错，而不是把日志写进错误位置：
+//     - 路径为空
+//     - 工作目录获取失败（os.Getwd 出错）
+//     - 工作目录位于系统临时目录（通常是编辑器以临时目录启动进程导致，
+//       此时无法定位调用工程，日志会落到 tmp 下，属于运行环境配置错误）
+func resolveLogPath(path string) (string, error) {
+	if path == "" {
+		return "", fmt.Errorf("log.file.path is empty")
+	}
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path), nil
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve relative log path %q (log.file.path): get working directory: %w", path, err)
+	}
+	if isTempDir(wd) {
+		return "", fmt.Errorf("cannot resolve relative log path %q (log.file.path): working directory %q is inside the system temp dir; "+
+			"run the program from the project directory or use an absolute path", path, wd)
+	}
+	return filepath.Join(wd, path), nil
+}
+
+// isTempDir 判断 dir 是否等于系统临时目录或位于其下
+// Windows 路径大小写不敏感，统一按不敏感比较
+func isTempDir(dir string) bool {
+	tmp := os.TempDir()
+	if tmp == "" {
+		return false
+	}
+	if strings.EqualFold(dir, tmp) {
+		return true
+	}
+	if len(dir) > len(tmp) && (dir[len(tmp)] == filepath.Separator || dir[len(tmp)] == '/') {
+		return strings.EqualFold(dir[:len(tmp)], tmp)
+	}
+	return false
+}
+
 // New 创建日志记录器
 // 返回具体类型 *SLogger（指针）：调用方持有具体类型可避免接口装箱，
 // 便于编译器内联/去虚化；*SLogger 完整实现了 Logger 接口，需要接口处可直接隐式转换
-// 路径约定：configPath 与 log.file.path 均按调用方传入的原样使用，
-// 相对路径基于进程当前工作目录解析；日志目录/文件由 FileWriter 自动创建
+// 路径约定：configPath 按调用方传入的原样使用；
+// log.file.path 若为相对路径则基于进程工作目录（调用工程所在目录）解析，
+// 工作目录缺失或位于系统临时目录时直接报错
 func New(configPath string) (*SLogger, error) {
 	cfg, err := config.LoadConfig(configPath)
 	if err != nil {
@@ -777,7 +822,11 @@ func New(configPath string) (*SLogger, error) {
 		writers = append(writers, os.Stdout)
 	}
 	if cfg.Log.File.Enabled {
-		logPath := cfg.Log.File.Path
+		// 相对路径基于调用工程所在目录解析；工作目录异常时直接报错
+		logPath, err := resolveLogPath(cfg.Log.File.Path)
+		if err != nil {
+			return nil, err
+		}
 		fw, err := writer.NewFileWriter(writer.FileWriterConfig{
 			Dir:         filepath.Dir(logPath),
 			BaseName:    filepath.Base(logPath[:len(logPath)-len(filepath.Ext(logPath))]),

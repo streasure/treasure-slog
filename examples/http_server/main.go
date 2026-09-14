@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	logger "github.com/streasure/treasure-slog"
@@ -11,7 +12,12 @@ import (
 
 func main() {
 	// 显式初始化全局 logger（首次 New 调用会设置全局实例）
-	if _, err := logger.New("configs/config.yaml"); err != nil {
+	// 配置路径：默认 configs/config.yaml，可通过第一个位置参数指定
+	configPath := "configs/config.yaml"
+	if len(os.Args) > 1 {
+		configPath = os.Args[1]
+	}
+	if _, err := logger.New(configPath); err != nil {
 		fmt.Println("初始化 logger 失败:", err)
 		return
 	}

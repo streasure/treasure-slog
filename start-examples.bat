@@ -25,17 +25,17 @@ goto end
 
 :basic
 echo 运行基础示例（开发环境）...
-go run examples/basic/main.go --config=configs/config.dev.yaml
+go run examples/basic/main.go configs/config.dev.yaml
 goto end
 
 :http
 echo 运行 HTTP 服务器示例（生产环境）...
-go run examples/http_server/main.go --config=configs/config.prod.yaml
+go run examples/http_server/main.go configs/config.prod.yaml
 goto end
 
 :highperf
 echo 运行高吞吐量测试（高性能模式）...
-go run examples/high_throughput/main.go --config=configs/config.highperf.yaml
+go run examples/high_throughput/main.go configs/config.highperf.yaml
 goto end
 
 :exit

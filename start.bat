@@ -1,6 +1,6 @@
 @echo off
 
-:: 启动脚本 - 演示如何通过命令行参数传递配置文件路径
+:: 启动脚本 - 演示如何通过位置参数传递配置文件路径
 
 :: 默认配置
 set DEFAULT_CONFIG=configs/config.yaml
@@ -23,7 +23,7 @@ if "%1"=="" (
     go run cmd/main.go
 ) else ( 
     echo 使用指定配置文件: %1
-    go run cmd/main.go --config=%1
+    go run cmd/main.go %1
 )
 
 pause
