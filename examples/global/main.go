@@ -2,10 +2,18 @@ package main
 
 import (
 	"context"
+	"fmt"
+
 	logger "github.com/streasure/treasure-slog"
 )
 
 func main() {
+	// 显式初始化全局 logger（首次 New 调用会设置全局实例）
+	if _, err := logger.New("configs/config.yaml"); err != nil {
+		fmt.Println("初始化 logger 失败:", err)
+		return
+	}
+
 	// 直接使用全局函数记录日志
 	logger.Info("Hello from global Info function")
 	logger.Debug("Hello from global Debug function")

@@ -734,81 +734,13 @@ var (
 	once         sync.Once
 )
 
-// exeDir 是启动时缓存的可执行文件所在目录，避免重复调用 os.Executable()
-var exeDir string
-
-// init caches the executable directory for path resolution
-func init() {
-	if path, err := os.Executable(); err == nil {
-		exeDir = filepath.Dir(path)
-	}
-}
-
-// resolveExistingPath 将相对路径解析为绝对路径，适用于已存在的文件（如配置文件）。
-// 优先基于 exe 所在目录解析，若文件不存在则 fallback 到基于当前工作目录的路径。
-func resolveExistingPath(p string) string {
-	if filepath.IsAbs(p) {
-		return p
-	}
-	if exeDir != "" {
-		abs := filepath.Join(exeDir, p)
-		if _, err := os.Stat(abs); err == nil {
-			return abs
-		}
-	}
-	return p
-}
-
-// resolvePath 将相对路径解析为绝对路径，适用于待创建的文件（如日志文件）。
-// 直接基于 exe 所在目录解析，无需检查文件是否存在。
-func resolvePath(p string) string {
-	if filepath.IsAbs(p) {
-		return p
-	}
-	if exeDir != "" {
-		return filepath.Join(exeDir, p)
-	}
-	return p
-}
-
-// init parses --config flag and initializes globalLogger (must run after exeDir init)
-func init() {
-	// 解析 --config 命令行参数，自动初始化全局 logger
-	if configPath := parseConfigFlag(); configPath != "" {
-		if l, err := New(configPath); err == nil {
-			globalLogger = l
-		}
-	}
-}
-
-// parseConfigFlag 解析 --config 命令行参数
-func parseConfigFlag() string {
-	for i := 1; i < len(os.Args); i++ {
-		arg := os.Args[i]
-		if arg == "--config" || arg == "-config" {
-			if i+1 < len(os.Args) {
-				return os.Args[i+1]
-			}
-		}
-		if len(arg) > 9 && arg[:9] == "--config=" {
-			return arg[9:]
-		}
-		if len(arg) > 8 && arg[:8] == "-config=" {
-			return arg[8:]
-		}
-	}
-	// 尝试默认配置文件（优先 exe 目录）
-	if _, err := os.Stat(resolveExistingPath("configs/config.yaml")); err == nil {
-		return resolveExistingPath("configs/config.yaml")
-	}
-	return ""
-}
-
 // New 创建日志记录器
 // 返回具体类型 *SLogger（指针）：调用方持有具体类型可避免接口装箱，
 // 便于编译器内联/去虚化；*SLogger 完整实现了 Logger 接口，需要接口处可直接隐式转换
+// 路径约定：configPath 与 log.file.path 均按调用方传入的原样使用，
+// 相对路径基于进程当前工作目录解析；日志目录/文件由 FileWriter 自动创建
 func New(configPath string) (*SLogger, error) {
-	cfg, err := config.LoadConfig(resolveExistingPath(configPath))
+	cfg, err := config.LoadConfig(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("load config error: %w", err)
 	}
@@ -845,8 +777,7 @@ func New(configPath string) (*SLogger, error) {
 		writers = append(writers, os.Stdout)
 	}
 	if cfg.Log.File.Enabled {
-		logPath := resolvePath(cfg.Log.File.Path)
-		cfg.Log.File.Path = logPath
+		logPath := cfg.Log.File.Path
 		fw, err := writer.NewFileWriter(writer.FileWriterConfig{
 			Dir:         filepath.Dir(logPath),
 			BaseName:    filepath.Base(logPath[:len(logPath)-len(filepath.Ext(logPath))]),

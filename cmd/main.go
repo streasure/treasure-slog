@@ -8,6 +8,12 @@ import (
 )
 
 func main() {
+	// 显式初始化全局 logger（首次 New 调用会设置全局实例）
+	if _, err := logger.New("configs/config.yaml"); err != nil {
+		fmt.Println("初始化 logger 失败:", err)
+		return
+	}
+
 	fmt.Println("=== Treasure-Slog 示例程序 ===")
 
 	// 基础日志记录
