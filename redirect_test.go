@@ -3,7 +3,6 @@ package logger
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -103,6 +102,8 @@ func TestRedirectFailure_SetLevelDynamic(t *testing.T) {
 			s, cw := makeTestLogger(t, tt.initLevel)
 			cw.Reset()
 
+			ctx := context.Background()
+
 			// 切换级别
 			s.SetLevel(tt.switchTo)
 			// 等待级别变更生效
@@ -111,13 +112,13 @@ func TestRedirectFailure_SetLevelDynamic(t *testing.T) {
 			// 发送测试日志
 			switch tt.testLevel {
 			case slog.LevelDebug:
-				s.Debug("test-debug-msg", "key", "value")
+				s.Debug(ctx, "test-debug-msg key=%s", "value")
 			case slog.LevelInfo:
-				s.Info("test-info-msg", "key", "value")
+				s.Info(ctx, "test-info-msg key=%s", "value")
 			case slog.LevelWarn:
-				s.Warn("test-warn-msg", "key", "value")
+				s.Warn(ctx, "test-warn-msg key=%s", "value")
 			case slog.LevelError:
-				s.Error("test-error-msg", "key", "value")
+				s.Error(ctx, "test-error-msg key=%s", "value")
 			}
 
 			// 同步模式，日志应立即写入
@@ -136,6 +137,8 @@ func TestRedirectFailure_SetLevelDynamic(t *testing.T) {
 func TestRedirectFailure_RapidSetLevel(t *testing.T) {
 	s, cw := makeTestLogger(t, "info")
 
+	ctx := context.Background()
+
 	// 快速连续切换
 	levels := []string{"debug", "error", "info", "warn", "debug", "error", "info"}
 	for _, lvl := range levels {
@@ -145,9 +148,9 @@ func TestRedirectFailure_RapidSetLevel(t *testing.T) {
 	// 最终级别是 info，debug 应被过滤
 	s.SetLevel("info")
 	cw.Reset()
-	s.Debug("should-not-appear")
-	s.Info("should-appear")
-	s.Error("should-appear")
+	s.Debug(ctx, "should-not-appear")
+	s.Info(ctx, "should-appear")
+	s.Error(ctx, "should-appear")
 
 	content := cw.String()
 	if strings.Contains(content, "should-not-appear") {
@@ -162,12 +165,14 @@ func TestRedirectFailure_RapidSetLevel(t *testing.T) {
 func TestRedirectFailure_DerivedLogger(t *testing.T) {
 	s, cw := makeTestLogger(t, "error")
 
+	ctx := context.Background()
+
 	// 派生 logger
 	derived := s.With("component", "test-service")
 	cw.Reset()
 
 	// 初始级别 error，info 应被过滤
-	derived.Info("should-not-appear")
+	derived.Info(ctx, "should-not-appear")
 	if strings.Contains(cw.String(), "should-not-appear") {
 		t.Errorf("派生 logger 的 info 未被过滤")
 	}
@@ -177,9 +182,9 @@ func TestRedirectFailure_DerivedLogger(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 	cw.Reset()
 
-	derived.Debug("should-appear-now")
+	derived.Debug(ctx, "should-appear-now")
 	if !strings.Contains(cw.String(), "should-appear-now") {
-		t.Errorf("派生 logger 在 SetLevel 后 debug 日志未输出，重定向失效")
+		t.Errorf("派生 logger 的 SetLevel 的 debug 日志未输出，重定向失败")
 	}
 	if !strings.Contains(cw.String(), "test-service") {
 		t.Errorf("派生 logger 的固定字段未输出")
@@ -195,7 +200,7 @@ func TestRedirectFailure_WithContext(t *testing.T) {
 	cw.Reset()
 
 	// 初始级别 warn，info 应被过滤
-	derived.Info("should-not-appear")
+	derived.Info(context.Background(), "should-not-appear")
 	if strings.Contains(cw.String(), "should-not-appear") {
 		t.Errorf("WithContext 派生 logger 的 info 未被过滤")
 	}
@@ -205,10 +210,10 @@ func TestRedirectFailure_WithContext(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 	cw.Reset()
 
-	derived.Debug("should-appear")
+	derived.Debug(context.Background(), "should-appear")
 	content := cw.String()
 	if !strings.Contains(content, "should-appear") {
-		t.Errorf("WithContext 派生 logger 在 SetLevel 后 debug 未输出")
+		t.Errorf("WithContext 派生 logger 的 SetLevel 的 debug 未输出")
 	}
 	if !strings.Contains(content, "req-123") {
 		t.Errorf("WithContext 的 context 值未注入")
@@ -220,6 +225,7 @@ func TestRedirectFailure_WithContext(t *testing.T) {
 func TestRedirectFailure_ConcurrentSetLevelAndLog(t *testing.T) {
 	s, cw := makeTestLogger(t, "info")
 
+	ctx := context.Background()
 	var wg sync.WaitGroup
 	// 一个 goroutine 持续切换级别（只在 debug/info 间切换，确保 Info 始终通过）
 	wg.Add(1)
@@ -239,7 +245,7 @@ func TestRedirectFailure_ConcurrentSetLevelAndLog(t *testing.T) {
 			defer wg.Done()
 			defer func() { recover() }()
 			for j := 0; j < 500; j++ {
-				s.Info(fmt.Sprintf("log-%d-%d", id, j), "worker", id)
+				s.Info(ctx, "log-%d-%d worker=%d", id, j, id)
 			}
 		}(i)
 	}
@@ -255,7 +261,7 @@ func TestRedirectFailure_ConcurrentSetLevelAndLog(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(content), "\n")
 	for i, line := range lines {
 		if len(line) > 0 && line[0] != '{' {
-			t.Errorf("第 %d 行不是合法JSON: %s", i, line[:min(50, len(line))])
+			t.Errorf("第%d 行不是合法JSON: %s", i, line[:min(50, len(line))])
 		}
 	}
 }
@@ -279,8 +285,9 @@ func TestRedirectFailure_TextHandlerLevel(t *testing.T) {
 	})
 	s.logger = slog.New(handler)
 
+	ctx := context.Background()
 	cw.Reset()
-	s.Info("should-not-appear")
+	s.Info(ctx, "should-not-appear")
 	if strings.Contains(cw.String(), "should-not-appear") {
 		t.Errorf("TextHandler 模式 info 未被过滤")
 	}
@@ -288,9 +295,9 @@ func TestRedirectFailure_TextHandlerLevel(t *testing.T) {
 	s.SetLevel("info")
 	time.Sleep(10 * time.Millisecond)
 	cw.Reset()
-	s.Info("should-appear")
+	s.Info(ctx, "should-appear")
 	if !strings.Contains(cw.String(), "should-appear") {
-		t.Errorf("TextHandler 模式 SetLevel 后 info 未输出，重定向失效")
+		t.Errorf("TextHandler 模式 SetLevel 的 info 未输出，重定向失败")
 	}
 }
 
@@ -325,8 +332,10 @@ func TestRedirectFailure_AsyncMode(t *testing.T) {
 		s.workers[i].start()
 	}
 
+	ctx := context.Background()
+
 	// 初始级别 error，info 应被过滤
-	s.Info("should-not-appear")
+	s.Info(ctx, "should-not-appear")
 	time.Sleep(50 * time.Millisecond)
 	if strings.Contains(cw.String(), "should-not-appear") {
 		t.Errorf("异步模式 info 未被过滤")
@@ -336,12 +345,12 @@ func TestRedirectFailure_AsyncMode(t *testing.T) {
 	s.SetLevel("debug")
 	time.Sleep(50 * time.Millisecond)
 
-	s.Debug("should-appear-async")
+	s.Debug(ctx, "should-appear-async")
 	time.Sleep(100 * time.Millisecond)
 
 	content := cw.String()
 	if !strings.Contains(content, "should-appear-async") {
-		t.Errorf("异步模式 SetLevel 后 debug 未输出，重定向失效")
+		t.Errorf("异步模式 SetLevel 的 debug 未输出，重定向失败")
 	}
 
 	// 清理
@@ -369,8 +378,9 @@ func TestRedirectFailure_SamplingHandler(t *testing.T) {
 	})
 	s.logger = slog.New(handler)
 
+	ctx := context.Background()
 	cw.Reset()
-	s.Info("should-not-appear")
+	s.Info(ctx, "should-not-appear")
 	if strings.Contains(cw.String(), "should-not-appear") {
 		t.Errorf("SamplingHandler 模式 info 未被过滤")
 	}
@@ -378,13 +388,13 @@ func TestRedirectFailure_SamplingHandler(t *testing.T) {
 	s.SetLevel("info")
 	time.Sleep(10 * time.Millisecond)
 	cw.Reset()
-	s.Info("should-appear")
+	s.Info(ctx, "should-appear")
 	if !strings.Contains(cw.String(), "should-appear") {
-		t.Errorf("SamplingHandler 模式 SetLevel 后 info 未输出，重定向失效")
+		t.Errorf("SamplingHandler 模式 SetLevel 的 info 未输出，重定向失败")
 	}
 }
 
-// TestRedirectFailure_NilSLogger nil logger 不 panic
+// TestRedirectFailure_NilSLogger nil logger 的 panic
 func TestRedirectFailure_NilSLogger(t *testing.T) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -394,9 +404,9 @@ func TestRedirectFailure_NilSLogger(t *testing.T) {
 
 	var s *SLogger
 	s.SetLevel("debug")
-	s.Info("test")
-	s.Debug("test")
-	s.Error("test")
+	s.Info(context.Background(), "test")
+	s.Debug(context.Background(), "test")
+	s.Error(context.Background(), "test")
 	_ = s.GetLevel()
 	_ = s.Sync()
 }
@@ -421,16 +431,17 @@ func TestRedirectFailure_MultiOutput(t *testing.T) {
 	handler := NewFastHandler(mw, s.level)
 	s.logger = slog.New(handler)
 
+	ctx := context.Background()
 	cw1.Reset()
 	cw2.Reset()
-	s.Info("should-not-appear")
+	s.Info(ctx, "should-not-appear")
 	if cw1.String() != "" || cw2.String() != "" {
 		t.Errorf("多输出模式 info 未被过滤")
 	}
 
 	s.SetLevel("info")
 	time.Sleep(10 * time.Millisecond)
-	s.Info("should-appear")
+	s.Info(ctx, "should-appear")
 	if !strings.Contains(cw1.String(), "should-appear") {
 		t.Errorf("多输出 writer1 未输出")
 	}

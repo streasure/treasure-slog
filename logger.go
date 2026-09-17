@@ -1,4 +1,4 @@
-// Package logger 提供高性能日志实现，基于 Go 原生 slog 库
+// Package logger 提供高性能日志实现，基于 Go 原生 slog
 package logger
 
 import (
@@ -30,14 +30,10 @@ type Hook interface {
 
 // Logger 接口定义日志方法
 type Logger interface {
-	Debug(msg string, args ...any)
-	DebugContext(ctx context.Context, msg string, args ...any)
-	Info(msg string, args ...any)
-	InfoContext(ctx context.Context, msg string, args ...any)
-	Warn(msg string, args ...any)
-	WarnContext(ctx context.Context, msg string, args ...any)
-	Error(msg string, args ...any)
-	ErrorContext(ctx context.Context, msg string, args ...any)
+	Debug(ctx context.Context, format string, args ...any)
+	Info(ctx context.Context, format string, args ...any)
+	Warn(ctx context.Context, format string, args ...any)
+	Error(ctx context.Context, format string, args ...any)
 	With(args ...any) Logger
 	WithContext(ctx context.Context) Logger
 	AddHook(hook Hook) Logger
@@ -52,13 +48,6 @@ var logEntryPool = sync.Pool{
 	New: func() any { return &logEntry{} },
 }
 
-var fastBufPool = sync.Pool{
-	New: func() any {
-		buf := make([]byte, 0, 512)
-		return &buf
-	},
-}
-
 // --- timingStats 核心路径耗时统计 ---
 
 var timing = newTimingStats()
@@ -67,7 +56,7 @@ type timingStats struct {
 	enabled atomic.Bool
 
 	// 计数器
-	logCalls       atomic.Int64 // 总 log() 调用次数
+	logCalls       atomic.Int64 // log() 调用次数
 	logFiltered    atomic.Int64 // 级别过滤丢弃次数
 	logSyncPath    atomic.Int64 // 同步路径处理次数
 	logAsyncPush   atomic.Int64 // 异步推入环形缓冲区次数
@@ -84,7 +73,7 @@ type timingStats struct {
 	asyncProcessNS  atomic.Int64 // 异步 processEntry 耗时
 	hookExecNS      atomic.Int64 // Hook 执行耗时
 	slogCallNS      atomic.Int64 // slog.DebugContext/InfoContext 等调用耗时
-	handlerHandleNS atomic.Int64 // FastHandler.Handle 序列化+写入耗时
+	handlerHandleNS atomic.Int64 // FastHandler.Handle 序列化/写入耗时
 	batchProcessNS  atomic.Int64 // worker.processBatch 总耗时
 }
 
@@ -213,9 +202,9 @@ func (e *logEntry) Reset() {
 
 // --- ringBuffer 分片环形缓冲区 ---
 
-// ringBuffer 分片设计：每个 worker 拥有一个独立 shard
+// ringBuffer 分片设计：每个 worker 拥有一个独占 shard
 // 生产者通过 round-robin 选择 shard，单 shard 仅多生产者单消费者（MPSC）
-// MPSC 下 mutex 临界区最小化（仅 head/tail 推进），低竞争时性能优于无锁 CAS 链
+// MPSC 下 mutex 临界区最小化（仅 head/tail 推进），低竞争时性能优于无锁 CAS
 type ringBuffer struct {
 	shards []*rbShard
 	next   atomic.Uint64 // round-robin 计数器
@@ -242,7 +231,7 @@ func newShardedRingBuffer(capacity, shards int) *ringBuffer {
 	if c < 1024 {
 		c = 1024
 	}
-	if c&(c-1) != 0 { // 向上取整到2的幂
+	if c&(c-1) != 0 { // 向上取整到 2 的幂
 		c--
 		c |= c >> 1
 		c |= c >> 2
@@ -283,7 +272,7 @@ func (rb *ringBuffer) Push(entry *logEntry) bool {
 	if rb.ns <= 1 {
 		return rb.shards[0].push(entry)
 	}
-	// round-robin 选 shard，减少单 shard 锁竞争
+	// round-robin 到 shard，减少单 shard 锁竞争
 	idx := rb.next.Add(1) % uint64(rb.ns)
 	return rb.shards[idx].push(entry)
 }
@@ -404,7 +393,7 @@ func (bw *batchWriter) flush() {
 		return
 	}
 	if bw.buffer.Buffered() > 0 {
-		bw.buffer.Flush()
+		bw.buffer.Flush() // 忽略错误：timer flush 失败不影响主流程，下次 Write 会再试
 	}
 	if bw.timer != nil {
 		bw.timer.Reset(bw.interval)
@@ -580,7 +569,7 @@ type SLogger struct {
 	asyncEnabled  bool      // 是否启用异步模式
 	lockFree      bool      // 是否启用无锁优化
 	prealloc      bool      // 是否启用预分配
-	syncOnce      sync.Once // 保证 Sync 只执行一次关闭逻辑，消除并发双关闭竞态
+	syncOnce      sync.Once // 保证 Sync 只执行一次关闭逻辑，消除并发双关闭竞争
 }
 
 // --- worker ---
@@ -590,7 +579,7 @@ type worker struct {
 	logger   *SLogger
 	stopCh   chan struct{}
 	wg       *sync.WaitGroup
-	stopOnce sync.Once // 保证 close(stopCh) 只执行一次，消除双关闭竞态
+	stopOnce sync.Once // 保证 close(stopCh) 只执行一次，消除双关闭竞争
 }
 
 func (w *worker) start() {
@@ -737,13 +726,14 @@ var (
 
 // resolveLogPath 解析 log.file.path 为绝对路径
 // 规则：
-//  1. 绝对路径：原样使用
-//  2. 相对路径：基于进程工作目录（即调用工程所在目录）解析
-//  3. 以下情况直接报错，而不是把日志写进错误位置：
-//     - 路径为空
-//     - 工作目录获取失败（os.Getwd 出错）
-//     - 工作目录位于系统临时目录（通常是编辑器以临时目录启动进程导致，
-//       此时无法定位调用工程，日志会落到 tmp 下，属于运行环境配置错误）
+//
+//	1. 绝对路径：原样使用
+//	2. 相对路径：基于进程工作目录（即调用工程所在目录）解析
+//	3. 以下情况直接报错，而不是把日志写进错误位置：
+//	   - 路径为空
+//	   - 工作目录获取失败（os.Getwd 出错）
+//	   - 工作目录位于系统临时目录（通常是编辑器以临时目录启动进程导致，
+//	     此时无法定位调用工程，日志会落到 tmp 下，属于运行环境配置错误）
 func resolveLogPath(path string) (string, error) {
 	if path == "" {
 		return "", fmt.Errorf("log.file.path is empty")
@@ -782,7 +772,7 @@ func isTempDir(dir string) bool {
 // 返回具体类型 *SLogger（指针）：调用方持有具体类型可避免接口装箱，
 // 便于编译器内联/去虚化；*SLogger 完整实现了 Logger 接口，需要接口处可直接隐式转换
 // 路径约定：configPath 按调用方传入的原样使用；
-// log.file.path 若为相对路径则基于进程工作目录（调用工程所在目录）解析，
+// log.file.path 若为相对路径则基于进程工作目录（调用工程所在目录）解析。
 // 工作目录缺失或位于系统临时目录时直接报错
 func New(configPath string) (*SLogger, error) {
 	cfg, err := config.LoadConfig(configPath)
@@ -833,7 +823,7 @@ func New(configPath string) (*SLogger, error) {
 			Ext:         filepath.Ext(logPath),
 			MaxSize:     int64(cfg.Log.File.Rotate.MaxSize) * 1024 * 1024, // MB -> bytes
 			MaxBackups:  cfg.Log.File.Rotate.MaxBackups,
-			MaxAge:      time.Duration(cfg.Log.File.Rotate.MaxAge) * 24 * time.Hour, // 天 -> duration
+			MaxAge:      time.Duration(cfg.Log.File.Rotate.MaxAge) * 24 * time.Hour, // 天-> duration
 			Compress:    cfg.Log.File.Rotate.Compress,
 			Interval:    cfg.Log.File.Rotate.Interval,
 		})
@@ -899,7 +889,7 @@ func New(configPath string) (*SLogger, error) {
 		if slogger.lockFree && workerCount < 4 {
 			workerCount = 4
 		}
-		// 分片环形缓冲区：shard 数 = worker 数，每 worker 独占一个 shard
+		// 分片环形缓冲区：shard 数 = worker 数，每个 worker 独占一个 shard
 		slogger.ringBuf = newShardedRingBuffer(bufSize, workerCount)
 		slogger.workers = make([]*worker, workerCount)
 		for i := 0; i < workerCount; i++ {
@@ -1035,7 +1025,7 @@ func (l *SLogger) log(ctx context.Context, level slog.Level, msg string, args ..
 		return
 	}
 
-	// 级别过滤（热路径：先过滤再进 defer，避免无谓 defer 开销）
+	// 级别过滤（热路径：先过滤再进 defer，避免无用 defer 开销）
 	var currentLevel slog.Level
 	if l.level != nil {
 		currentLevel = slog.Level(l.level.Load())
@@ -1172,11 +1162,11 @@ func (l *SLogger) processEntryDirect(ctx context.Context, level slog.Level, msg 
 // shouldAddStacktrace 根据配置的 stacktrace.level 判断是否需要添加堆栈
 func (l *SLogger) shouldAddStacktrace(level slog.Level) bool {
 	if l.cfg == nil {
-		return true // 默认仅 error 级别
+		return true // 默认：error 级别
 	}
 	cfgLevel := l.cfg.Log.Stacktrace.Level
 	if cfgLevel == "" {
-		return level >= slog.LevelError // 默认仅 error
+		return level >= slog.LevelError // 默认：error
 	}
 	switch cfgLevel {
 	case "debug":
@@ -1278,91 +1268,125 @@ func safeLevelString(level slog.Level) string {
 
 // --- 公开方法 ---
 
-func (l *SLogger) Debug(msg string, args ...any) {
-	l.log(context.Background(), slog.LevelDebug, msg, args...)
+func (l *SLogger) Debug(ctx context.Context, format string, args ...any) {
+	l.logf(ctx, slog.LevelDebug, format, args...)
 }
-func (l *SLogger) DebugContext(ctx context.Context, msg string, args ...any) {
-	l.log(ctx, slog.LevelDebug, msg, args...)
+func (l *SLogger) Info(ctx context.Context, format string, args ...any) {
+	l.logf(ctx, slog.LevelInfo, format, args...)
 }
-func (l *SLogger) Info(msg string, args ...any) {
-	l.log(context.Background(), slog.LevelInfo, msg, args...)
+func (l *SLogger) Warn(ctx context.Context, format string, args ...any) {
+	l.logf(ctx, slog.LevelWarn, format, args...)
 }
-func (l *SLogger) InfoContext(ctx context.Context, msg string, args ...any) {
-	l.log(ctx, slog.LevelInfo, msg, args...)
+func (l *SLogger) Error(ctx context.Context, format string, args ...any) {
+	l.logf(ctx, slog.LevelError, format, args...)
 }
-func (l *SLogger) Warn(msg string, args ...any) {
-	l.log(context.Background(), slog.LevelWarn, msg, args...)
+
+// logf Printf 风格日志：先检查级别，通过后才执行 fmt.Sprintf，避免无用格式化开销
+func (l *SLogger) logf(ctx context.Context, level slog.Level, format string, args ...any) {
+	if l == nil || l.logger == nil {
+		return
+	}
+	var currentLevel slog.Level
+	if l.level != nil {
+		currentLevel = slog.Level(l.level.Load())
+	}
+	if currentLevel == 0 {
+		currentLevel = slog.LevelInfo
+	}
+	if level < currentLevel {
+		if timing.enabled.Load() {
+			timing.logFiltered.Add(1)
+			timing.logCalls.Add(1)
+		}
+		return
+	}
+
+	// 格式化消息
+	msg := fmt.Sprintf(format, args...)
+
+	// 提取 context 中的 trace 信息，作为额外字段添加到日志
+	var contextArgs []any
+	if ctx != nil {
+		contextArgs = extractContextInfo(ctx)
+	}
+	l.log(ctx, level, msg, contextArgs...)
 }
-func (l *SLogger) WarnContext(ctx context.Context, msg string, args ...any) {
-	l.log(ctx, slog.LevelWarn, msg, args...)
-}
-func (l *SLogger) Error(msg string, args ...any) {
-	l.log(context.Background(), slog.LevelError, msg, args...)
-}
-func (l *SLogger) ErrorContext(ctx context.Context, msg string, args ...any) {
-	l.log(ctx, slog.LevelError, msg, args...)
+
+// withContext 内部方法：返回 *SLogger（避免接口装箱开销）
+// 优化：只在 context 有值时才创建新实例
+func (l *SLogger) withContext(ctx context.Context) *SLogger {
+	if l == nil || l.logger == nil {
+		return l
+	}
+
+	// 检查 context 是否有需要提取的值
+	args := extractContextInfo(ctx)
+	if len(args) == 0 {
+		// context 没有 trace 信息，直接返回当前 logger，避免创建新实例
+		return l
+	}
+
+	// 直接分配（不能用 sync.Pool：derived logger 生命周期由调用方管理，无法回收）
+	newLogger := &SLogger{}
+
+	// 复用基础字段（共享，不需要拷贝）
+	newLogger.logger = l.logger
+	newLogger.handler = l.handler
+	newLogger.hooks = l.hooks
+	newLogger.fileLogger = l.fileLogger
+	newLogger.level = l.level
+	newLogger.levelVar = l.levelVar
+	newLogger.ringBuf = l.ringBuf
+	newLogger.batchWriter = l.batchWriter
+	newLogger.networkWriter = l.networkWriter
+	newLogger.cfg = l.cfg
+	newLogger.workers = l.workers
+	newLogger.wg = l.wg
+	newLogger.usePool = l.usePool
+	newLogger.asyncEnabled = l.asyncEnabled
+	newLogger.lockFree = l.lockFree
+	newLogger.prealloc = l.prealloc
+
+	// 添加 context 字段
+	slogLogger := l.logger.With(safeArgs(args)...)
+	newLogger.logger = slogLogger
+	newLogger.handler = slogLogger.Handler()
+
+	return newLogger
 }
 
 func (l *SLogger) With(args ...any) Logger {
 	if l == nil || l.logger == nil {
 		return l
 	}
-	defer func() {
-		if r := recover(); r != nil {
-			fmt.Fprintf(os.Stderr, "[treasure-slog] With panic recovered: %v\n", r)
-		}
-	}()
-	newSlogLogger := l.logger.With(safeArgs(args)...)
-	newLogger := &SLogger{
-		logger:        newSlogLogger,
-		handler:       newSlogLogger.Handler(), // 关键：用带新属性的 handler，否则 With 的字段会丢失
-		hooks:         l.hooks,
-		fileLogger:    l.fileLogger,
-		level:         l.level,
-		levelVar:      l.levelVar,
-		ringBuf:       l.ringBuf,
-		batchWriter:   l.batchWriter,
-		networkWriter: l.networkWriter,
-		cfg:           l.cfg,
-		workers:       l.workers,
-		wg:            l.wg,
-		usePool:       l.usePool,
-		asyncEnabled:  l.asyncEnabled,
-		lockFree:      l.lockFree,
-		prealloc:      l.prealloc,
-	}
+
+	// 直接分配（不能用 sync.Pool：derived logger 生命周期由调用方管理，无法回收）
+	newLogger := &SLogger{}
+
+	// 添加字段
+	slogLogger := l.logger.With(safeArgs(args)...)
+	newLogger.logger = slogLogger
+	newLogger.handler = slogLogger.Handler()
+	newLogger.hooks = l.hooks
+	newLogger.fileLogger = l.fileLogger
+	newLogger.level = l.level
+	newLogger.levelVar = l.levelVar
+	newLogger.ringBuf = l.ringBuf
+	newLogger.batchWriter = l.batchWriter
+	newLogger.networkWriter = l.networkWriter
+	newLogger.cfg = l.cfg
+	newLogger.workers = l.workers
+	newLogger.wg = l.wg
+	newLogger.usePool = l.usePool
+	newLogger.asyncEnabled = l.asyncEnabled
+	newLogger.lockFree = l.lockFree
+	newLogger.prealloc = l.prealloc
+
 	return newLogger
 }
 
 func (l *SLogger) WithContext(ctx context.Context) Logger {
-	if l == nil || l.logger == nil {
-		return l
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			fmt.Fprintf(os.Stderr, "[treasure-slog] WithContext panic recovered: %v\n", r)
-		}
-	}()
-	args := extractContextInfo(ctx)
-	newLogger := l.logger.With(safeArgs(args)...)
-	return &SLogger{
-		logger:        newLogger,
-		handler:       newLogger.Handler(),
-		hooks:         l.hooks,
-		fileLogger:    l.fileLogger,
-		level:         l.level,
-		levelVar:      l.levelVar,
-		ringBuf:       l.ringBuf,
-		batchWriter:   l.batchWriter,
-		networkWriter: l.networkWriter,
-		cfg:           l.cfg,
-		workers:       l.workers,
-		wg:            l.wg,
-		usePool:       l.usePool,
-		asyncEnabled:  l.asyncEnabled,
-		lockFree:      l.lockFree,
-		prealloc:      l.prealloc,
-	}
+	return l.withContext(ctx)
 }
 
 func extractContextInfo(ctx context.Context) []any {
@@ -1467,6 +1491,7 @@ func (l *SLogger) Sync() error {
 	if l == nil {
 		return nil
 	}
+	var syncErr error
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Fprintf(os.Stderr, "[treasure-slog] Sync panic recovered: %v\n", r)
@@ -1484,16 +1509,22 @@ func (l *SLogger) Sync() error {
 		}
 		l.workers = nil
 		if l.batchWriter != nil {
-			l.batchWriter.Close()
+			if err := l.batchWriter.Close(); err != nil {
+				syncErr = err
+			}
 		}
 		if l.fileLogger != nil {
-			l.fileLogger.Close()
+			if err := l.fileLogger.Close(); err != nil {
+				syncErr = err
+			}
 		}
 		if l.networkWriter != nil {
-			l.networkWriter.Close()
+			if err := l.networkWriter.Close(); err != nil {
+				syncErr = err
+			}
 		}
 	})
-	return nil
+	return syncErr
 }
 
 // --- getStackTrace ---
@@ -1514,44 +1545,24 @@ func getStackTrace(depth int) string {
 
 // --- 全局函数 ---
 
-func Debug(msg string, args ...any) {
+func Debug(ctx context.Context, format string, args ...any) {
 	if globalLogger != nil {
-		globalLogger.Debug(msg, args...)
+		globalLogger.Debug(ctx, format, args...)
 	}
 }
-func DebugContext(ctx context.Context, msg string, args ...any) {
+func Info(ctx context.Context, format string, args ...any) {
 	if globalLogger != nil {
-		globalLogger.DebugContext(ctx, msg, args...)
+		globalLogger.Info(ctx, format, args...)
 	}
 }
-func Info(msg string, args ...any) {
+func Warn(ctx context.Context, format string, args ...any) {
 	if globalLogger != nil {
-		globalLogger.Info(msg, args...)
+		globalLogger.Warn(ctx, format, args...)
 	}
 }
-func InfoContext(ctx context.Context, msg string, args ...any) {
+func Error(ctx context.Context, format string, args ...any) {
 	if globalLogger != nil {
-		globalLogger.InfoContext(ctx, msg, args...)
-	}
-}
-func Warn(msg string, args ...any) {
-	if globalLogger != nil {
-		globalLogger.Warn(msg, args...)
-	}
-}
-func WarnContext(ctx context.Context, msg string, args ...any) {
-	if globalLogger != nil {
-		globalLogger.WarnContext(ctx, msg, args...)
-	}
-}
-func Error(msg string, args ...any) {
-	if globalLogger != nil {
-		globalLogger.Error(msg, args...)
-	}
-}
-func ErrorContext(ctx context.Context, msg string, args ...any) {
-	if globalLogger != nil {
-		globalLogger.ErrorContext(ctx, msg, args...)
+		globalLogger.Error(ctx, format, args...)
 	}
 }
 func With(args ...any) Logger {
@@ -1593,7 +1604,7 @@ func Recover() {
 	if r := recover(); r != nil {
 		stackTrace := getStackTrace(10)
 		if globalLogger != nil {
-			globalLogger.Error("panic recovered", "recover", r, "stacktrace", stackTrace)
+			globalLogger.Error(context.Background(), "panic recovered: %v, stacktrace: %s", r, stackTrace)
 		}
 	}
 }

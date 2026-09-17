@@ -38,134 +38,376 @@ go get github.com/streasure/treasure-slog
 
 ## 快速开始
 
-### 初始化模型
+### 初始化
 
 treasure-slog **没有任何隐式初始化**：import 无副作用，不解析命令行参数，不读取默认配置。
 
 - 必须显式调用 `New(configPath)` 创建 logger
 - **首次** `New` 调用会同时设置全局实例（`sync.Once` 保证），此后包级全局函数即可用
-- `New` 返回具体类型 `*SLogger`（完整实现 `Logger` 接口），调用方持有具体类型可避免接口分发开销
+- `New` 返回具体类型 `*SLogger`（完整实现 `Logger` 接口）
 
-路径语义：
+### API 设计
 
-- `configPath` 按传入值原样使用，找不到配置文件时 `New` 报错
-- `log.file.path` 为绝对路径时原样使用；相对路径基于**进程工作目录**（调用工程所在目录）解析为绝对路径，日志目录不存在时自动创建（含多级目录）
-- **工作目录异常直接报错**：工作目录获取失败、或位于系统临时目录（编辑器以 tmp 目录启动进程的常见现象）时，`New` 返回错误而不是把日志写进临时目录
+统一接口：**必须传入 context，Printf 格式化**
 
-### 全局函数（推荐）
+```go
+Debug(ctx context.Context, format string, args ...any)
+Info(ctx context.Context, format string, args ...any)
+Warn(ctx context.Context, format string, args ...any)
+Error(ctx context.Context, format string, args ...any)
+```
+
+## 接口详细说明
+
+### 1. 基础日志方法
+
+所有日志方法必须传入 `context.Context`，使用 Printf 风格格式化。
 
 ```go
 package main
 
 import (
+    "context"
+    "fmt"
+    
     logger "github.com/streasure/treasure-slog"
 )
 
 func main() {
-    // 显式初始化：首次 New 设置全局实例
     if _, err := logger.New("configs/config.yaml"); err != nil {
         panic(err)
     }
-    defer logger.Sync() // 退出前必须调用，确保异步日志落盘
-
-    logger.Info("应用启动", "version", "1.0.0", "env", "production")
-    logger.Warn("警告信息", "threshold", 80)
-    logger.Error("错误信息", "error", "connection failed")
+    defer logger.Sync()
+    
+    ctx := context.Background()
+    
+    // 基础使用
+    logger.Debug(ctx, "调试信息 key=%s", "value")
+    logger.Info(ctx, "应用启动 version=%s env=%s", "1.0.0", "production")
+    logger.Warn(ctx, "警告信息 threshold=%d", 80)
+    logger.Error(ctx, "错误信息 error=%v", fmt.Errorf("connection failed"))
+    
+    // 多参数格式化
+    logger.Info(ctx, "用户登录 user=%s ip=%s browser=%s", "admin", "192.168.1.1", "Chrome")
 }
 ```
 
-### 实例用法
+**输出示例：**
+```json
+{"level":"INFO","msg":"应用启动 version=1.0.0 env=production","time":"2024-01-01T10:00:00Z"}
+```
+
+### 2. With 方法 - 添加固定字段
+
+返回派生的 logger，自动添加固定字段到后续所有日志。
 
 ```go
-log, err := logger.New("configs/config.yaml")
-if err != nil {
-    panic(err)
+package main
+
+import (
+    "context"
+    
+    logger "github.com/streasure/treasure-slog"
+)
+
+func main() {
+    if _, err := logger.New("configs/config.yaml"); err != nil {
+        panic(err)
+    }
+    defer logger.Sync()
+    
+    ctx := context.Background()
+    
+    // 基础 With
+    userLog := logger.With("user_id", "12345", "ip", "192.168.1.1")
+    userLog.Info(ctx, "用户登录成功")
+    userLog.Info(ctx, "执行操作 action=%s", "buy")
+    
+    // 链式 With
+    orderLog := logger.With("user_id", "12345").With("order_id", "ORD-001")
+    orderLog.Info(ctx, "创建订单")
+    
+    // 配合 context
+    ctxLog := logger.WithContext(ctx).With("module", "payment")
+    ctxLog.Info(ctx, "处理支付")
 }
-defer log.Sync()
-
-// New 返回 *SLogger，可直接调用全部方法
-log.Info("使用实例记录日志")
-
-// With 派生带固定字段的 logger（派生实例共享级别/队列/worker 等运行时状态）
-userLog := log.With("user_id", "12345", "ip", "192.168.1.1")
-userLog.Info("用户登录")
-userLog.Info("用户操作", "action", "buy")
-// {"level":"INFO","msg":"用户登录","user_id":"12345","ip":"192.168.1.1"}
 ```
 
-### Context 追踪注入
+**输出示例：**
+```json
+{"level":"INFO","msg":"用户登录成功","user_id":"12345","ip":"192.168.1.1","time":"2024-01-01T10:00:00Z"}
+{"level":"INFO","msg":"执行操作 action=buy","user_id":"12345","ip":"192.168.1.1","time":"2024-01-01T10:00:01Z"}
+```
+
+### 3. WithContext 方法 - 链路追踪
+
+自动从 context 中提取 `request_id`、`user_id`、`span_id`、`trace_id` 等追踪信息。
 
 ```go
-ctx := context.Background()
-ctx = context.WithValue(ctx, "request_id", "req-abc-123")
-ctx = context.WithValue(ctx, "trace_id", "trace-xyz-789")
+package main
 
-ctxLog := logger.WithContext(ctx)
-ctxLog.Info("处理请求")
-// {"level":"INFO","msg":"处理请求","request_id":"req-abc-123","trace_id":"trace-xyz-789"}
+import (
+    "context"
+    
+    logger "github.com/streasure/treasure-slog"
+)
+
+func main() {
+    if _, err := logger.New("configs/config.yaml"); err != nil {
+        panic(err)
+    }
+    defer logger.Sync()
+    
+    // 模拟 HTTP 请求 context
+    ctx := context.Background()
+    ctx = context.WithValue(ctx, "request_id", "req-abc-123")
+    ctx = context.WithValue(ctx, "trace_id", "trace-xyz-789")
+    ctx = context.WithValue(ctx, "user_id", "user-456")
+    
+    // 方式1：每次调用时传入 ctx（自动提取 trace 信息）
+    logger.Info(ctx, "处理请求")
+    
+    // 方式2：派生 logger，后续自动携带 trace 信息
+    ctxLog := logger.WithContext(ctx)
+    ctxLog.Info(ctx, "开始处理")
+    ctxLog.Info(ctx, "处理完成 latency=%dms", 45)
+}
 ```
 
-### 运行示例
-
-仓库内置可运行示例（均支持可选位置参数指定配置路径）：
-
-```bash
-go run ./cmd                          # 综合演示（默认 configs/config.yaml）
-go run ./examples/basic configs/config.dev.yaml
-go run ./examples/http_server         # HTTP 服务示例（监听 :8080）
-go run ./examples/high_throughput     # 100 万条高吞吐测试
-go run ./examples/global              # 全局函数用法
+**输出示例：**
+```json
+{"level":"INFO","msg":"处理请求","request_id":"req-abc-123","trace_id":"trace-xyz-789","user_id":"user-456","time":"2024-01-01T10:00:00Z"}
 ```
 
-Windows 下也可使用 `start.bat` / `start-examples.bat`。
+### 4. AddHook 方法 - 自定义钩子
 
-## API 一览
-
-### Logger 接口（`*SLogger` 完整实现）
-
-| 方法 | 说明 |
-|------|------|
-| `Debug / Info / Warn / Error(msg, args...)` | 基础日志（args 为 key-value 成对，奇数个自动补 `<missing-value>`） |
-| `DebugContext / InfoContext / ...` | 携带 context 版本 |
-| `With(args...) Logger` | 派生带固定字段的 logger |
-| `WithContext(ctx) Logger` | 派生自动注入 context 追踪字段的 logger |
-| `AddHook(hook) Logger` | 追加自定义 Hook，返回新 logger |
-| `SetLevel(level) / GetLevel()` | 运行时动态级别（派生 logger 共享） |
-| `Sync() error` | 刷盘并优雅关闭（幂等，可安全多次/并发调用） |
-
-### 包级全局函数
-
-`logger.Info(...)` 等全部日志方法、`With` / `WithContext` / `AddHook` / `SetLevel` / `GetLevel` / `Sync` / `Recover`，在首次 `New` 之后生效。
-
-### Panic 恢复
+在每条日志输出时执行自定义回调，用于指标统计、告警、日志转发等。
 
 ```go
-func riskyOperation() {
-    defer logger.Recover() // 捕获 panic，记录 error 日志与堆栈，程序继续执行
+package main
+
+import (
+    "context"
+    "sync"
+    
+    logger "github.com/streasure/treasure-slog"
+)
+
+// MetricsHook 统计各级别日志数量
+type MetricsHook struct {
+    mu      sync.Mutex
+    counter map[string]int64
+}
+
+func (h *MetricsHook) Run(msg string, level string, args ...any) {
+    h.mu.Lock()
+    defer h.mu.Unlock()
+    h.counter[level]++
+}
+
+func main() {
+    if _, err := logger.New("configs/config.yaml"); err != nil {
+        panic(err)
+    }
+    defer logger.Sync()
+    
+    // 创建 hook 并添加到 logger
+    hook := &MetricsHook{counter: make(map[string]int64)}
+    hookedLog := logger.AddHook(hook)
+    
+    ctx := context.Background()
+    
+    // 使用带 hook 的 logger
+    hookedLog.Info(ctx, "用户登录")
+    hookedLog.Warn(ctx, "性能警告")
+    hookedLog.Error(ctx, "连接失败")
+    
+    // 查看统计
+    hook.mu.Lock()
+    for level, count := range hook.counter {
+        println(level, count)
+    }
+    hook.mu.Unlock()
+}
+```
+
+### 5. SetLevel / GetLevel 方法 - 动态调整级别
+
+运行时动态调整日志级别，所有派生 logger 共享级别状态。
+
+```go
+package main
+
+import (
+    "context"
+    
+    logger "github.com/streasure/treasure-slog"
+)
+
+func main() {
+    if _, err := logger.New("configs/config.yaml"); err != nil {
+        panic(err)
+    }
+    defer logger.Sync()
+    
+    ctx := context.Background()
+    
+    // 获取当前级别
+    println(logger.GetLevel()) // "info"
+    
+    // 切换到 debug（所有后续日志生效）
+    logger.SetLevel("debug")
+    logger.Debug(ctx, "这条 debug 日志会显示")
+    
+    // 恢复到 info
+    logger.SetLevel("info")
+    logger.Debug(ctx, "这条 debug 日志不会显示")
+}
+```
+
+### 6. Recover 方法 - Panic 恢复
+
+自动捕获 panic 并记录错误日志与堆栈信息。
+
+```go
+package main
+
+import (
+    "context"
+    
+    logger "github.com/streasure/treasure-slog"
+)
+
+func main() {
+    if _, err := logger.New("configs/config.yaml"); err != nil {
+        panic(err)
+    }
+    defer logger.Sync()
+    
+    // 使用 Recover 捕获 panic
+    defer logger.Recover()
+    
+    // 模拟 panic
     panic("something went wrong")
 }
 ```
 
-### 自定义 Hook
-
-```go
-type MetricsHook struct {
-    counter map[string]int
-}
-
-// Hook 接口：每条被处理的日志都会回调（级别过滤之后）
-func (h *MetricsHook) Run(msg string, level string, args ...any) {
-    h.counter[level]++
-}
-
-hookedLog := logger.AddHook(&MetricsHook{counter: make(map[string]int)})
+**输出示例：**
+```json
+{"level":"ERROR","msg":"panic recovered: something went wrong, stacktrace: goroutine 1 [running]:...","time":"2024-01-01T10:00:00Z"}
 ```
 
-### 耗时诊断（性能调优）
+### 7. Sync 方法 - 刷盘关闭
+
+优雅关闭 logger，确保异步队列中的日志全部落盘。
 
 ```go
-logger.EnableTiming(true)   // 开启各阶段耗时统计
-defer logger.DumpTiming()   // 输出到 stderr：级别检查/入队/序列化/写入等分项耗时
+package main
+
+import (
+    "context"
+    
+    logger "github.com/streasure/treasure-slog"
+)
+
+func main() {
+    if _, err := logger.New("configs/config.yaml"); err != nil {
+        panic(err)
+    }
+    
+    ctx := context.Background()
+    logger.Info(ctx, "应用启动")
+    
+    // 退出前必须调用 Sync（幂等，可多次调用）
+    if err := logger.Sync(); err != nil {
+        println("sync error:", err)
+    }
+}
+```
+
+### 8. EnableTiming / DumpTiming 方法 - 性能诊断
+
+内置耗时统计，用于定位性能瓶颈。
+
+```go
+package main
+
+import (
+    "context"
+    
+    logger "github.com/streasure/treasure-slog"
+)
+
+func main() {
+    if _, err := logger.New("configs/config.yaml"); err != nil {
+        panic(err)
+    }
+    defer logger.Sync()
+    
+    // 开启耗时统计
+    logger.EnableTiming(true)
+    defer logger.DumpTiming() // 输出到 stderr
+    
+    ctx := context.Background()
+    
+    // 执行日志调用
+    for i := 0; i < 1000; i++ {
+        logger.Info(ctx, "test message i=%d", i)
+    }
+}
+```
+
+**输出示例：**
+```
+=== treasure-slog 耗时统计 ===
+总调用:           1000
+级别过滤丢弃:     0 (0.0%)
+同步路径处理:     1000
+log() 总耗时:     avg=150 ns  total=150000 ns
+级别检查:         avg=1 ns    total=1000 ns
+slog调用:         avg=50 ns   total=50000 ns
+=================================
+```
+
+### 9. Hook 接口 - 自定义钩子实现
+
+```go
+// Hook 接口定义
+type Hook interface {
+    Run(msg string, level string, args ...any)
+}
+
+// AlertHook 示例：Error 级别时发送告警
+type AlertHook struct {
+    AlertFunc func(msg string)
+}
+
+func (h *AlertHook) Run(msg string, level string, args ...any) {
+    if level == "ERROR" {
+        h.AlertFunc(msg)
+    }
+}
+
+// 使用
+alertHook := &AlertHook{
+    AlertFunc: func(msg string) {
+        // 发送告警（邮件、钉钉、Slack 等）
+        println("ALERT:", msg)
+    },
+}
+hookedLog := logger.AddHook(alertHook)
+```
+
+## 运行示例
+
+仓库内置可运行示例（均支持可选位置参数指定配置路径）：
+
+```bash
+go run ./cmd                          # 综合演示（默认 configs/tlog.yaml）
+go run ./examples/basic configs/tlog.dev.yaml
+go run ./examples/http_server         # HTTP 服务示例（监听 :8080）
+go run ./examples/high_throughput     # 100 万条高吞吐测试
+go run ./examples/global              # 全局函数用法
 ```
 
 ## 配置参考
@@ -185,7 +427,7 @@ log:
     buffer_size: 10000       # 环形缓冲区容量（向上取整到 2 的幂，按 worker 分片）
     batch_size: 100          # worker 单批处理条数
     flush_interval: 100      # 刷新间隔（毫秒）
-    workers: 4               # worker 数量
+    worker_multiplier: 1     # worker 数 = CPU 核数 × 倍数（默认 1，最大 32）
 
   # 控制台输出
   console:
@@ -231,16 +473,6 @@ log:
     prealloc: true            # 环形缓冲区容量加倍，预分配
 ```
 
-### 预置环境配置（configs/ 目录）
-
-| 配置文件 | 场景 | 要点 |
-|----------|------|------|
-| `config.dev.yaml` | 开发 | 同步模式 + 控制台 text + debug 级别 |
-| `config.yaml` | 通用 | 异步 + 文件输出 + 采样 + error 堆栈 |
-| `config.prod.yaml` | 生产 | 异步 8 worker + 文件轮转压缩 + 采样 |
-| `config.highperf.yaml` | 极限吞吐 | 1M 缓冲 16 worker + 全部性能开关 |
-| `config.large.yaml` | 大日志（单条 >1MB） | 小缓冲小批量 + 禁压缩 + 采样 |
-
 ### 网络输出示例
 
 ```yaml
@@ -262,25 +494,55 @@ log:
     tls: true
 ```
 
-### 多 Logger 实例
+### Worker 配置
 
-```go
-businessLog, _ := logger.New("configs/business.yaml")
-defer businessLog.Sync()
+Worker 数量根据 CPU 核数自动计算：`worker 数 = CPU 核数 × 倍数`
 
-auditLog, _ := logger.New("configs/audit.yaml")
-defer auditLog.Sync()
-
-businessLog.Info("订单创建", "order_id", "123")
-auditLog.Info("用户登录", "user_id", "456")
+```yaml
+log:
+  async:
+    worker_multiplier: 1     # 默认值：worker 数 = CPU 核数
+    worker_multiplier: 2     # 高并发：worker 数 = CPU 核数 × 2
+    worker_multiplier: 0.5   # 低资源：worker 数 = CPU 核数 / 2
 ```
 
-> 注意：仅**首次** `New` 设置全局实例；多实例场景建议直接持有各 `*SLogger` 使用。
+**计算规则：**
+- `worker 数 = runtime.NumCPU() × worker_multiplier`
+- 最小值：1
+- 最大值：32
+
+**示例（12 核 CPU）：**
+| 倍数 | Worker 数 |
+|------|----------|
+| 1 | 12 |
+| 2 | 24 |
+| 3 | 32（上限） |
+
+### 预置配置文件
+
+仓库内置 4 套配置，位于 `configs/` 目录：
+
+| 文件 | 场景 | 要点 |
+|------|------|------|
+| `tlog.dev.yaml` | 开发 | 同步模式 + 控制台 text + debug 级别 |
+| `tlog.yaml` | 通用 | 异步 + 文件输出 + 采样 + error 堆栈 |
+| `tlog.prod.yaml` | 生产 | 异步 worker_multiplier=1 + 文件轮转压缩 + 采样 |
+| `tlog.highperf.yaml` | 极限吞吐 | 1M 缓冲 + worker_multiplier=2 + 全部性能开关 |
+
+**使用方式：**
+
+```go
+// 开发环境
+logger.New("configs/tlog.dev.yaml")
+
+// 生产环境
+logger.New("configs/tlog.prod.yaml")
+```
 
 ## 架构
 
 ```
-业务调用 logger.Info(msg, k1, v1, ...)
+业务调用 logger.Info(ctx, msg, args...)
         │
         ▼
    级别快速过滤（atomic load，未达级别直接返回）

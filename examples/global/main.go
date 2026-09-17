@@ -10,8 +10,8 @@ import (
 
 func main() {
 	// 显式初始化全局 logger（首次 New 调用会设置全局实例）
-	// 配置路径：默认 configs/config.yaml，可通过第一个位置参数指定
-	configPath := "configs/config.yaml"
+	// 配置路径：默认 configs/tlog.yaml，可通过第一个位置参数指定
+	configPath := "configs/tlog.yaml"
 	if len(os.Args) > 1 {
 		configPath = os.Args[1]
 	}
@@ -20,25 +20,27 @@ func main() {
 		return
 	}
 
+	ctx := context.Background()
+
 	// 直接使用全局函数记录日志
-	logger.Info("Hello from global Info function")
-	logger.Debug("Hello from global Debug function")
-	logger.Warn("Hello from global Warn function")
-	logger.Error("Hello from global Error function")
+	logger.Info(ctx, "Hello from global Info function")
+	logger.Debug(ctx, "Hello from global Debug function")
+	logger.Warn(ctx, "Hello from global Warn function")
+	logger.Error(ctx, "Hello from global Error function")
 
 	// 使用 With 函数添加字段
 	userLogger := logger.With("user", "john", "age", 30)
-	userLogger.Info("User info")
+	userLogger.Info(ctx, "User info")
 
 	// 使用 WithContext 函数添加上下文
-	ctx := context.Background()
+	ctx = context.WithValue(ctx, "request_id", "req-123")
 	ctxLogger := userLogger.WithContext(ctx)
-	ctxLogger.Info("WithContext example")
+	ctxLogger.Info(ctx, "WithContext example")
 
 	// 动态设置日志级别
 	logger.SetLevel("debug")
 	level := logger.GetLevel()
-	logger.Info("Current log level", "level", level)
+	logger.Info(ctx, "Current log level=%s", level)
 
 	// 同步日志
 	logger.Sync()

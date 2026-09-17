@@ -43,10 +43,11 @@ func TestAllFeatures(t *testing.T) {
 		t.Fatalf("Failed to create logger: %v", err)
 	}
 
-	logger.Debug("Debug message", "key1", "value1", "key2", 42)
-	logger.Info("Info message", "key1", "value1", "key2", 42)
-	logger.Warn("Warn message", "key1", "value1", "key2", 42)
-	logger.Error("Error message", "key1", "value1", "key2", 42)
+	ctx := context.Background()
+	logger.Debug(ctx, "Debug message key1=%s key2=%d", "value1", 42)
+	logger.Info(ctx, "Info message key1=%s key2=%d", "value1", 42)
+	logger.Warn(ctx, "Warn message key1=%s key2=%d", "value1", 42)
+	logger.Error(ctx, "Error message key1=%s key2=%d", "value1", 42)
 
 	t.Log("=== Testing hook chain ===")
 	hookCalled := false
@@ -58,7 +59,7 @@ func TestAllFeatures(t *testing.T) {
 	}
 
 	loggerWithHook := logger.AddHook(testHook)
-	loggerWithHook.Info("Test message with hook", "key", "value")
+	loggerWithHook.Info(ctx, "Test message with hook key=%s", "value")
 
 	err = loggerWithHook.Sync()
 	if err != nil {
@@ -70,13 +71,12 @@ func TestAllFeatures(t *testing.T) {
 	}
 
 	t.Log("=== Testing context auto-injection ===")
-	ctx := context.Background()
 	ctx = context.WithValue(ctx, "request_id", "test-request-id")
 	ctx = context.WithValue(ctx, "user_id", "test-user-id")
 	ctx = context.WithValue(ctx, "span_id", "test-span-id")
 
 	ctxLogger := logger.WithContext(ctx)
-	ctxLogger.Info("Test message with context")
+	ctxLogger.Info(ctx, "Test message with context")
 
 	t.Log("=== Testing panic recovery ===")
 	func() {

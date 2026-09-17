@@ -3,10 +3,10 @@ log:
   format: json
   async:
     enabled: true
+    worker_multiplier: 2
     buffer_size: 1000000
     batch_size: 2000
     flush_interval: 10
-    workers: 16
   console:
     enabled: false
   file:

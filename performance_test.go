@@ -1,6 +1,7 @@
 package logger
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"sync"
@@ -59,16 +60,18 @@ log:
 	defer os.Remove("./logs/benchmark.log")
 
 	// 使用 New 函数创建日志记录器
-	logger, err := New(configPath)
+	l, err := New(configPath)
 	if err != nil {
 		b.Fatalf("Failed to create logger: %v", err)
 	}
-	defer logger.Sync()
+	defer l.Sync()
+
+	ctx := context.Background()
 
 	// 预热
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			logger.Info("Warmup message", "key", "value", "count", 1)
+			l.Info(ctx, "Warmup message key=%s count=%d", "value", 1)
 		}
 	})
 
@@ -81,26 +84,21 @@ log:
 	// 并发测试
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			logger.Info("Benchmark info message",
-				"key1", "value1",
-				"key2", 42,
-				"key3", 3.14,
-				"key4", true,
-				"timestamp", time.Now().UnixNano(),
-			)
+			l.Info(ctx, "Benchmark info message key1=%s key2=%d key3=%f key4=%t timestamp=%d",
+				"value1", 42, 3.14, true, time.Now().UnixNano())
 		}
 	})
 
 	// 同步日志
 	b.StopTimer()
-	err = logger.Sync()
+	err = l.Sync()
 	if err != nil {
 		b.Fatalf("Failed to sync logger: %v", err)
 	}
 }
 
-// BenchmarkAsync 异步性能测试
-func BenchmarkAsync(b *testing.B) {
+// BenchmarkAsyncFullLink 异步性能测试（使用文件写入）
+func BenchmarkAsyncFullLink(b *testing.B) {
 	// 确保日志目录存在
 	logDir := "logs"
 	if err := os.MkdirAll(logDir, 0755); err != nil {
@@ -144,15 +142,17 @@ log:
 	defer os.Remove("./logs/async_benchmark.log")
 
 	// 创建日志记录器
-	logger, err := New(configPath)
+	l, err := New(configPath)
 	if err != nil {
 		b.Fatalf("Failed to create logger: %v", err)
 	}
-	defer logger.Sync()
+	defer l.Sync()
+
+	ctx := context.Background()
 
 	// 预热
 	for i := 0; i < 1000; i++ {
-		logger.Info("Warmup", "i", i)
+		l.Info(ctx, "Warmup i=%d", i)
 	}
 	time.Sleep(100 * time.Millisecond)
 
@@ -160,11 +160,11 @@ log:
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			logger.Info("Async log message", "key", "value")
+			l.Info(ctx, "Async log message key=%s", "value")
 		}
 	})
 	b.StopTimer()
-	logger.Sync()
+	l.Sync()
 }
 
 // BenchmarkDifferentLevels 不同日志级别性能测试
@@ -207,28 +207,30 @@ log:
 	defer os.Remove("./logs/levels_benchmark.log")
 
 	// 创建日志记录器
-	logger, err := New(configPath)
+	l, err := New(configPath)
 	if err != nil {
 		b.Fatalf("Failed to create logger: %v", err)
 	}
-	defer logger.Sync()
+	defer l.Sync()
+
+	ctx := context.Background()
 
 	// 测试不同级别
 	levels := []struct {
 		name string
-		fn   func(string, ...any)
+		fn   func(context.Context, string, ...any)
 	}{
-		{"Debug", logger.Debug},
-		{"Info", logger.Info},
-		{"Warn", logger.Warn},
-		{"Error", logger.Error},
+		{"Debug", l.Debug},
+		{"Info", l.Info},
+		{"Warn", l.Warn},
+		{"Error", l.Error},
 	}
 
 	for _, level := range levels {
 		b.Run(level.name, func(b *testing.B) {
 			// 预热
 			for i := 0; i < 1000; i++ {
-				level.fn("Warmup", "i", i)
+				level.fn(ctx, "Warmup i=%d", i)
 			}
 			time.Sleep(100 * time.Millisecond)
 
@@ -236,11 +238,11 @@ log:
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {
 				for pb.Next() {
-					level.fn(level.name+" log message", "key", "value")
+					level.fn(ctx, "%s log message key=%s", level.name, "value")
 				}
 			})
 			b.StopTimer()
-			logger.Sync()
+			l.Sync()
 		})
 	}
 }
@@ -289,15 +291,17 @@ log:
 	defer os.Remove("./logs/concurrency_benchmark.log")
 
 	// 创建日志记录器
-	logger, err := New(configPath)
+	l, err := New(configPath)
 	if err != nil {
 		b.Fatalf("Failed to create logger: %v", err)
 	}
-	defer logger.Sync()
+	defer l.Sync()
+
+	ctx := context.Background()
 
 	// 预热
 	for i := 0; i < 1000; i++ {
-		logger.Info("Warmup", "i", i)
+		l.Info(ctx, "Warmup i=%d", i)
 	}
 	time.Sleep(100 * time.Millisecond)
 
@@ -315,17 +319,14 @@ log:
 				go func(id int) {
 					defer wg.Done()
 					for j := 0; j < logsPerGoroutine; j++ {
-						logger.Info("High concurrency log",
-							"goroutine", id,
-							"iteration", j,
-							"timestamp", time.Now().UnixNano(),
-						)
+						l.Info(ctx, "High concurrency log goroutine=%d iteration=%d timestamp=%d",
+							id, j, time.Now().UnixNano())
 					}
 				}(i)
 			}
 			wg.Wait()
 			b.StopTimer()
-			logger.Sync()
+			l.Sync()
 		})
 	}
 }
@@ -373,11 +374,13 @@ log:
 	defer os.Remove("./logs/fields_benchmark.log")
 
 	// 创建日志记录器
-	logger, err := New(configPath)
+	l, err := New(configPath)
 	if err != nil {
 		b.Fatalf("Failed to create logger: %v", err)
 	}
-	defer logger.Sync()
+	defer l.Sync()
+
+	ctx := context.Background()
 
 	// 测试不同字段数量
 	fieldCounts := []int{2, 4, 8, 16, 32}
@@ -386,14 +389,17 @@ log:
 		b.Run(fmt.Sprintf("Fields_%d", count), func(b *testing.B) {
 			// 预热
 			for i := 0; i < 1000; i++ {
-				args := []any{"Warmup"}
-				for j := 0; j < count/2; j++ {
-					args = append(args, fmt.Sprintf("key%d", j), fmt.Sprintf("value%d", j))
-				}
-				if len(args) == 1 {
-					logger.Info(args[0].(string))
+				kvPairs := count / 2
+				if kvPairs == 0 {
+					l.Info(ctx, "Warmup")
 				} else {
-					logger.Info(args[0].(string), args[1:]...)
+					format := "Warmup"
+					args := []any{}
+					for j := 0; j < kvPairs; j++ {
+						format += fmt.Sprintf(" key%d=%%s", j)
+						args = append(args, fmt.Sprintf("value%d", j))
+					}
+					l.Info(ctx, format, args...)
 				}
 			}
 			time.Sleep(100 * time.Millisecond)
@@ -402,19 +408,22 @@ log:
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {
 				for pb.Next() {
-					args := []any{"Log message with many fields"}
-					for j := 0; j < count/2; j++ {
-						args = append(args, fmt.Sprintf("key%d", j), fmt.Sprintf("value%d", j))
-					}
-					if len(args) == 1 {
-						logger.Info(args[0].(string))
+					kvPairs := count / 2
+					if kvPairs == 0 {
+						l.Info(ctx, "Log message with many fields")
 					} else {
-						logger.Info(args[0].(string), args[1:]...)
+						format := "Log message with many fields"
+						args := []any{}
+						for j := 0; j < kvPairs; j++ {
+							format += fmt.Sprintf(" key%d=%%s", j)
+							args = append(args, fmt.Sprintf("value%d", j))
+						}
+						l.Info(ctx, format, args...)
 					}
 				}
 			})
 			b.StopTimer()
-			logger.Sync()
+			l.Sync()
 		})
 	}
 }

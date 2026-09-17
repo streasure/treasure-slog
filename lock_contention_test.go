@@ -82,6 +82,7 @@ func TestLockContention_HighConcurrency_NoDeadlock(t *testing.T) {
 	s, cleanup := lockContentionTest(t, slog.LevelDebug, 8, 2000000, 1024)
 	defer cleanup()
 
+	ctx := context.Background()
 	const goroutines = 256
 	const perG = 5000
 	var wg sync.WaitGroup
@@ -97,7 +98,7 @@ func TestLockContention_HighConcurrency_NoDeadlock(t *testing.T) {
 					}
 				}()
 				for j := 0; j < perG; j++ {
-					s.Info("high-concurrency", "g", id, "j", j)
+					s.Info(ctx, "high-concurrency g=%d j=%d", id, j)
 				}
 			}(i)
 		}
@@ -109,14 +110,13 @@ func TestLockContention_HighConcurrency_NoDeadlock(t *testing.T) {
 	dropped := s.ringBuf.Dropped()
 	total := goroutines * perG
 	t.Logf("写入总数: %d, 丢弃: %d (%.4f%%)", total, dropped, float64(dropped)/float64(total)*100)
-	if dropped > int64(total)/10 { // 丢弃超过 10% 才报警
+	if dropped > int64(total)/10 { // 丢弃超过 10% 才报错
 		t.Errorf("丢弃率过高: %d/%d", dropped, total)
 	}
 }
 
 // --- TestLockContention_Scaling_MultiShard ---
 // 对比 1 shard vs N shard 的吞吐，验证分片确实降低锁竞争
-
 func TestLockContention_Scaling_MultiShard(t *testing.T) {
 	if testing.Short() {
 		t.Skip("跳过长测试，使用 -short")
@@ -128,9 +128,10 @@ func TestLockContention_Scaling_MultiShard(t *testing.T) {
 		s, cleanup := lockContentionTest(t, slog.LevelDebug, shards, 2000000, 1024)
 		defer cleanup()
 
+		ctx := context.Background()
 		// 预热
 		for i := 0; i < 100; i++ {
-			s.Info("warmup", "i", i)
+			s.Info(ctx, "warmup i=%d", i)
 		}
 		time.Sleep(20 * time.Millisecond)
 
@@ -142,7 +143,7 @@ func TestLockContention_Scaling_MultiShard(t *testing.T) {
 			go func(id int) {
 				defer wg.Done()
 				for j := 0; j < perG; j++ {
-					s.Info("scale", "g", id, "j", j)
+					s.Info(ctx, "scale g=%d j=%d", id, j)
 				}
 			}(i)
 		}
@@ -171,6 +172,7 @@ func TestLockContention_NoDropUnderNormalLoad(t *testing.T) {
 	s, cleanup := lockContentionTest(t, slog.LevelDebug, 8, 2000000, 1024)
 	defer cleanup()
 
+	ctx := context.Background()
 	const goroutines = 32
 	const perG = 2000
 	var wg sync.WaitGroup
@@ -180,7 +182,7 @@ func TestLockContention_NoDropUnderNormalLoad(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			for j := 0; j < perG; j++ {
-				s.Info("no-drop", "g", id, "j", j)
+				s.Info(ctx, "no-drop g=%d j=%d", id, j)
 			}
 		}(i)
 	}
@@ -199,16 +201,16 @@ func TestLockContention_NoDropUnderNormalLoad(t *testing.T) {
 // --- TestLockContention_DerivedLoggersShareRingBuf ---
 // 派生 logger (With/WithContext/AddHook) 应共享同一 ring buffer 和 level 指针
 // 验证派生 logger 不会绕过分片锁机制
-
 func TestLockContention_DerivedLoggersShareRingBuf(t *testing.T) {
 	s, cleanup := lockContentionTest(t, slog.LevelDebug, 8, 2000000, 1024)
 	defer cleanup()
 
+	ctx := context.Background()
+
 	// 派生多个 logger
 	derived1 := s.With("svc", "api")
 	derived2 := s.With("svc", "web")
-	ctx := context.WithValue(context.Background(), "request_id", "req-123")
-	derived3 := s.WithContext(ctx)
+	derived3 := s.WithContext(context.WithValue(ctx, "request_id", "req-123"))
 
 	// 验证所有派生 logger 共享同一 ringBuf 和 level 指针
 	dl1 := derived1.(*SLogger)
@@ -219,7 +221,7 @@ func TestLockContention_DerivedLoggersShareRingBuf(t *testing.T) {
 		t.Errorf("派生 logger 未共享 ringBuf，将无法享受分片锁优化")
 	}
 	if dl1.level != s.level || dl2.level != s.level || dl3.level != s.level {
-		t.Errorf("派生 logger 未共享 level 指针，级别变更无法传播")
+		t.Errorf("派生 logger 未共享 level 指针，级别变更无法传递")
 	}
 
 	// 并发写入派生 logger，验证不死锁
@@ -233,25 +235,25 @@ func TestLockContention_DerivedLoggersShareRingBuf(t *testing.T) {
 			go func(id int) {
 				defer wg.Done()
 				for j := 0; j < perG; j++ {
-					s.Info("base", "g", id, "j", j)
+					s.Info(ctx, "base g=%d j=%d", id, j)
 				}
 			}(i)
 			go func(id int) {
 				defer wg.Done()
 				for j := 0; j < perG; j++ {
-					derived1.Info("derived1", "g", id, "j", j)
+					derived1.Info(ctx, "derived1 g=%d j=%d", id, j)
 				}
 			}(i)
 			go func(id int) {
 				defer wg.Done()
 				for j := 0; j < perG; j++ {
-					derived2.Info("derived2", "g", id, "j", j)
+					derived2.Info(ctx, "derived2 g=%d j=%d", id, j)
 				}
 			}(i)
 			go func(id int) {
 				defer wg.Done()
 				for j := 0; j < perG; j++ {
-					derived3.Info("derived3", "g", id, "j", j)
+					derived3.Info(ctx, "derived3 g=%d j=%d", id, j)
 				}
 			}(i)
 		}
@@ -266,12 +268,13 @@ func TestLockContention_DerivedLoggersShareRingBuf(t *testing.T) {
 
 // --- TestLockContention_ConcurrentSetLevel_NoDataRace ---
 // 并发 SetLevel + 写入，验证级别原子切换无数据竞争、不 panic
-// 注意：需要 `go test -race` 才能检测底层 race，但此测试至少验证逻辑正确
+// 注意：需配合 `go test -race` 才能检测底层 race，但此测试至少验证逻辑正确
 
 func TestLockContention_ConcurrentSetLevel_NoDataRace(t *testing.T) {
 	s, cleanup := lockContentionTest(t, slog.LevelInfo, 8, 2000000, 1024)
 	defer cleanup()
 
+	ctx := context.Background()
 	const goroutines = 32
 	const perG = 1000
 	var wg sync.WaitGroup
@@ -300,13 +303,13 @@ func TestLockContention_ConcurrentSetLevel_NoDataRace(t *testing.T) {
 					// 混合各级别写入
 					switch j % 4 {
 					case 0:
-						s.Debug("mix", "g", id, "j", j)
+						s.Debug(ctx, "mix g=%d j=%d", id, j)
 					case 1:
-						s.Info("mix", "g", id, "j", j)
+						s.Info(ctx, "mix g=%d j=%d", id, j)
 					case 2:
-						s.Warn("mix", "g", id, "j", j)
+						s.Warn(ctx, "mix g=%d j=%d", id, j)
 					case 3:
-						s.Error("mix", "g", id, "j", j)
+						s.Error(ctx, "mix g=%d j=%d", id, j)
 					}
 				}
 			}(i)
@@ -319,9 +322,8 @@ func TestLockContention_ConcurrentSetLevel_NoDataRace(t *testing.T) {
 }
 
 // --- TestLockContention_AllInterfacesMixed ---
-// 所有 8 个公开接口（Debug/Info/Warn/Error + Context 版本）混合高并发
+// 所有 8 个公开接口（Debug/Info/Warn/Error + Printf 风格）混合高并发
 // 验证所有接口在分片锁机制下都正常工作
-
 func TestLockContention_AllInterfacesMixed(t *testing.T) {
 	if testing.Short() {
 		t.Skip("跳过长测试，使用 -short")
@@ -346,23 +348,15 @@ func TestLockContention_AllInterfacesMixed(t *testing.T) {
 					}
 				}()
 				for j := 0; j < perG; j++ {
-					switch j % 8 {
+					switch j % 4 {
 					case 0:
-						s.Debug("d", "g", id, "j", j)
+						s.Debug(ctx, "d g=%d j=%d", id, j)
 					case 1:
-						s.DebugContext(ctx, "dc", "g", id, "j", j)
+						s.Info(ctx, "i g=%d j=%d", id, j)
 					case 2:
-						s.Info("i", "g", id, "j", j)
+						s.Warn(ctx, "w g=%d j=%d", id, j)
 					case 3:
-						s.InfoContext(ctx, "ic", "g", id, "j", j)
-					case 4:
-						s.Warn("w", "g", id, "j", j)
-					case 5:
-						s.WarnContext(ctx, "wc", "g", id, "j", j)
-					case 6:
-						s.Error("e", "g", id, "j", j)
-					case 7:
-						s.ErrorContext(ctx, "ec", "g", id, "j", j)
+						s.Error(ctx, "e g=%d j=%d", id, j)
 					}
 				}
 			}(i)
@@ -377,12 +371,13 @@ func TestLockContention_AllInterfacesMixed(t *testing.T) {
 }
 
 // --- TestLockContention_ShutdownDuringWrite ---
-// 在写入过程中关闭 worker，验证不 panic（cleanup 中再次 Sync 应安全）
+// 在写入过程中关闭 worker，验证不 panic（cleanup 中再调 Sync 应安全）
 
 func TestLockContention_ShutdownDuringWrite(t *testing.T) {
 	s, cleanup := lockContentionTest(t, slog.LevelDebug, 8, 2000000, 1024)
 	defer cleanup()
 
+	ctx := context.Background()
 	const goroutines = 64
 	const perG = 1000
 	var wg sync.WaitGroup
@@ -401,7 +396,7 @@ func TestLockContention_ShutdownDuringWrite(t *testing.T) {
 			for j := 0; j < perG; j++ {
 				// 并发写入；cleanup 中的 Sync 会在测试结束时关闭 workers
 				// 写入过程中可能 worker 已停止（io.Discard 写失败不会 panic）
-				s.Info("shutdown-during-write", "g", id, "j", j)
+				s.Info(ctx, "shutdown-during-write g=%d j=%d", id, j)
 			}
 		}(i)
 	}
@@ -409,7 +404,7 @@ func TestLockContention_ShutdownDuringWrite(t *testing.T) {
 
 	// 第一次 Sync 关闭 workers
 	_ = s.Sync()
-	// 第二次 Sync 验证重复关闭安全（workers 已 nil，应直接返回）
+	// 第二次 Sync 验证重复关闭安全（workers 为 nil，应直接返回）
 	_ = s.Sync()
 	if p := panicCount.Load(); p > 0 {
 		t.Errorf("关闭期间发生 %d 次 panic", p)
@@ -418,7 +413,6 @@ func TestLockContention_ShutdownDuringWrite(t *testing.T) {
 
 // --- TestLockContention_ExtremeHighConcurrency_512 ---
 // 极端 512 goroutine 压力测试，验证锁竞争优化的极限
-
 func TestLockContention_ExtremeHighConcurrency_512(t *testing.T) {
 	if testing.Short() {
 		t.Skip("跳过长测试，使用 -short")
@@ -426,6 +420,7 @@ func TestLockContention_ExtremeHighConcurrency_512(t *testing.T) {
 	s, cleanup := lockContentionTest(t, slog.LevelDebug, 32, 4000000, 2048)
 	defer cleanup()
 
+	ctx := context.Background()
 	const goroutines = 512
 	const perG = 500
 	var wg sync.WaitGroup
@@ -442,7 +437,7 @@ func TestLockContention_ExtremeHighConcurrency_512(t *testing.T) {
 					}
 				}()
 				for j := 0; j < perG; j++ {
-					s.Info("extreme-512", "g", id, "j", j)
+					s.Info(ctx, "extreme-512 g=%d j=%d", id, j)
 				}
 			}(i)
 		}
@@ -454,7 +449,7 @@ func TestLockContention_ExtremeHighConcurrency_512(t *testing.T) {
 	dropped := s.ringBuf.Dropped()
 	total := goroutines * perG
 	throughput := float64(total) / elapsed.Seconds()
-	t.Logf("512 goroutine: 总计 %d 条, 耗时 %s, 吞吐 %.0f ops/s, 丢弃 %d (%.4f%%)",
+	t.Logf("512 goroutine: 总计 %d, 耗时 %s, 吞吐 %.0f ops/s, 丢弃 %d (%.4f%%)",
 		total, elapsed, throughput, dropped, float64(dropped)/float64(total)*100)
 
 	// 吞吐应至少达到 100 万 ops/s（验证锁竞争没有严重退化）
@@ -465,7 +460,6 @@ func TestLockContention_ExtremeHighConcurrency_512(t *testing.T) {
 
 // --- TestLockContention_BatchSizeScaling ---
 // 不同 batch size 对高并发吞吐的影响，验证 batch 处理减少锁次数
-
 func TestLockContention_BatchSizeScaling(t *testing.T) {
 	if testing.Short() {
 		t.Skip("跳过长测试，使用 -short")
@@ -477,6 +471,7 @@ func TestLockContention_BatchSizeScaling(t *testing.T) {
 		s, cleanup := lockContentionTest(t, slog.LevelDebug, 8, 2000000, batchSize)
 		defer cleanup()
 
+		ctx := context.Background()
 		var wg sync.WaitGroup
 		wg.Add(goroutines)
 		start := time.Now()
@@ -484,7 +479,7 @@ func TestLockContention_BatchSizeScaling(t *testing.T) {
 			go func(id int) {
 				defer wg.Done()
 				for j := 0; j < perG; j++ {
-					s.Info("batch", "g", id, "j", j)
+					s.Info(ctx, "batch g=%d j=%d", id, j)
 				}
 			}(i)
 		}
@@ -503,7 +498,6 @@ func TestLockContention_BatchSizeScaling(t *testing.T) {
 
 // --- TestLockContention_WorkerCountOptimal ---
 // 验证 worker 数量对吞吐的影响，证明分片锁机制下多 worker 能并行消费
-
 func TestLockContention_WorkerCountOptimal(t *testing.T) {
 	if testing.Short() {
 		t.Skip("跳过长测试，使用 -short")
@@ -514,6 +508,8 @@ func TestLockContention_WorkerCountOptimal(t *testing.T) {
 	runWithWorkers := func(workers int) float64 {
 		s, cleanup := lockContentionTest(t, slog.LevelDebug, workers, 2000000, 1024)
 		defer cleanup()
+
+		ctx := context.Background()
 		var wg sync.WaitGroup
 		wg.Add(goroutines)
 		start := time.Now()
@@ -521,7 +517,7 @@ func TestLockContention_WorkerCountOptimal(t *testing.T) {
 			go func(id int) {
 				defer wg.Done()
 				for j := 0; j < perG; j++ {
-					s.Info("workers", "g", id, "j", j)
+					s.Info(ctx, "workers g=%d j=%d", id, j)
 				}
 			}(i)
 		}
@@ -538,7 +534,7 @@ func TestLockContention_WorkerCountOptimal(t *testing.T) {
 		t.Logf("  workers=%2d: %.0f ops/s", w, tps)
 	}
 
-	// 8 workers 应明显优于 1 worker（验证消费者侧并行）
+	// 8 workers 应明显优于 1 worker（验证消费者侧并行性）
 	if results[8] < results[1] {
 		t.Errorf("8 workers (%.0f) 应优于 1 worker (%.0f)", results[8], results[1])
 	}
@@ -554,6 +550,7 @@ func TestLockContention_LongRunningStability(t *testing.T) {
 	s, cleanup := lockContentionTest(t, slog.LevelDebug, 16, 4000000, 2048)
 	defer cleanup()
 
+	ctx := context.Background()
 	const goroutines = 64
 	duration := 3 * time.Second
 	var wg sync.WaitGroup
@@ -577,7 +574,7 @@ func TestLockContention_LongRunningStability(t *testing.T) {
 					case <-stop:
 						return
 					default:
-						s.Info("long-run", "g", id)
+						s.Info(ctx, "long-run g=%d", id)
 						totalSent.Add(1)
 					}
 				}
@@ -636,6 +633,7 @@ func TestLockContention_VerifyEntriesProcessed(t *testing.T) {
 		s.workers[i].start()
 	}
 
+	ctx := context.Background()
 	const goroutines = 32
 	const perG = 1000
 	var wg sync.WaitGroup
@@ -644,7 +642,7 @@ func TestLockContention_VerifyEntriesProcessed(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			for j := 0; j < perG; j++ {
-				s.Info("verify", "g", id, "j", j)
+				s.Info(ctx, "verify g=%d j=%d", id, j)
 			}
 		}(i)
 	}
@@ -659,7 +657,7 @@ func TestLockContention_VerifyEntriesProcessed(t *testing.T) {
 	}
 }
 
-// countingWriter 计数写入次数（每条日志触发一次 Write）
+// countingWriter 计数写入次数（每次 Write 调用计数）
 type countingWriter struct {
 	counter *atomic.Int64
 }
@@ -679,6 +677,7 @@ func TestLockContention_DropRateUnderBufferPressure(t *testing.T) {
 	s, cleanup := lockContentionTest(t, slog.LevelDebug, 4, 4096, 256)
 	defer cleanup()
 
+	ctx := context.Background()
 	const goroutines = 64
 	const perG = 2000
 	var wg sync.WaitGroup
@@ -688,7 +687,7 @@ func TestLockContention_DropRateUnderBufferPressure(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			for j := 0; j < perG; j++ {
-				s.Info("pressure", "g", id, "j", j)
+				s.Info(ctx, "pressure g=%d j=%d", id, j)
 			}
 		}(i)
 	}
@@ -705,7 +704,7 @@ func TestLockContention_DropRateUnderBufferPressure(t *testing.T) {
 		t.Errorf("丢弃率 %.2f%% 过高，降级同步机制可能失效", dropRate)
 	}
 
-	// 同时验证：丢弃时不 panic
+	// 同时验证：丢弃时无 panic
 	t.Logf("缓冲压力下无 panic，降级同步路径生效")
 }
 
@@ -717,6 +716,7 @@ func TestLockContention_RaceDetector(t *testing.T) {
 	s, cleanup := lockContentionTest(t, slog.LevelDebug, 8, 2000000, 1024)
 	defer cleanup()
 
+	ctx := context.Background()
 	const goroutines = 16
 	const perG = 500
 	var wg sync.WaitGroup
@@ -729,13 +729,13 @@ func TestLockContention_RaceDetector(t *testing.T) {
 			for j := 0; j < perG; j++ {
 				switch j % 4 {
 				case 0:
-					s.Debug("race", "g", id, "j", j)
+					s.Debug(ctx, "race g=%d j=%d", id, j)
 				case 1:
-					s.Info("race", "g", id, "j", j)
+					s.Info(ctx, "race g=%d j=%d", id, j)
 				case 2:
-					s.Warn("race", "g", id, "j", j)
+					s.Warn(ctx, "race g=%d j=%d", id, j)
 				case 3:
-					s.Error("race", "g", id, "j", j)
+					s.Error(ctx, "race g=%d j=%d", id, j)
 				}
 			}
 		}(i)

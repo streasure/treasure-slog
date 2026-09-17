@@ -103,9 +103,11 @@ func BenchmarkAllLevelsAsync(b *testing.B) {
 	s := makeAsyncLogger(b, slog.LevelDebug, 8, 1000000)
 	defer s.Sync()
 
+	ctx := context.Background()
+
 	// 预热
 	for i := 0; i < 1000; i++ {
-		s.Info("warmup", "i", i)
+		s.Info(ctx, "warmup i=%d", i)
 	}
 	time.Sleep(50 * time.Millisecond)
 	b.ResetTimer()
@@ -115,13 +117,13 @@ func BenchmarkAllLevelsAsync(b *testing.B) {
 		for pb.Next() {
 			switch i % 4 {
 			case 0:
-				s.Debug("debug-msg", "key", "val", "n", i)
+				s.Debug(ctx, "debug-msg key=%s val=%s n=%d", "key", "val", i)
 			case 1:
-				s.Info("info-msg", "key", "val", "n", i)
+				s.Info(ctx, "info-msg key=%s val=%s n=%d", "key", "val", i)
 			case 2:
-				s.Warn("warn-msg", "key", "val", "n", i)
+				s.Warn(ctx, "warn-msg key=%s val=%s n=%d", "key", "val", i)
 			case 3:
-				s.Error("error-msg", "key", "val", "n", i)
+				s.Error(ctx, "error-msg key=%s val=%s n=%d", "key", "val", i)
 			}
 			i++
 		}
@@ -134,19 +136,20 @@ func BenchmarkAllLevelsAsync(b *testing.B) {
 
 func BenchmarkAllLevelsSync(b *testing.B) {
 	s := makeSyncLogger(b, slog.LevelDebug)
+	ctx := context.Background()
 
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
 			switch i % 4 {
 			case 0:
-				s.Debug("debug-msg", "key", "val")
+				s.Debug(ctx, "debug-msg key=%s val=%s", "key", "val")
 			case 1:
-				s.Info("info-msg", "key", "val")
+				s.Info(ctx, "info-msg key=%s val=%s", "key", "val")
 			case 2:
-				s.Warn("warn-msg", "key", "val")
+				s.Warn(ctx, "warn-msg key=%s val=%s", "key", "val")
 			case 3:
-				s.Error("error-msg", "key", "val")
+				s.Error(ctx, "error-msg key=%s val=%s", "key", "val")
 			}
 			i++
 		}
@@ -158,9 +161,10 @@ func BenchmarkAllLevelsSync(b *testing.B) {
 func BenchmarkAsyncDebug(b *testing.B) {
 	s := makeAsyncLogger(b, slog.LevelDebug, 8, 1000000)
 	defer s.Sync()
+	ctx := context.Background()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			s.Debug("debug", "key", "val")
+			s.Debug(ctx, "debug key=%s val=%s", "key", "val")
 		}
 	})
 	b.StopTimer()
@@ -170,9 +174,10 @@ func BenchmarkAsyncDebug(b *testing.B) {
 func BenchmarkAsyncInfo(b *testing.B) {
 	s := makeAsyncLogger(b, slog.LevelDebug, 8, 1000000)
 	defer s.Sync()
+	ctx := context.Background()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			s.Info("info", "key", "val")
+			s.Info(ctx, "info key=%s val=%s", "key", "val")
 		}
 	})
 	b.StopTimer()
@@ -182,9 +187,10 @@ func BenchmarkAsyncInfo(b *testing.B) {
 func BenchmarkAsyncWarn(b *testing.B) {
 	s := makeAsyncLogger(b, slog.LevelDebug, 8, 1000000)
 	defer s.Sync()
+	ctx := context.Background()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			s.Warn("warn", "key", "val")
+			s.Warn(ctx, "warn key=%s val=%s", "key", "val")
 		}
 	})
 	b.StopTimer()
@@ -194,9 +200,10 @@ func BenchmarkAsyncWarn(b *testing.B) {
 func BenchmarkAsyncError(b *testing.B) {
 	s := makeAsyncLogger(b, slog.LevelDebug, 8, 1000000)
 	defer s.Sync()
+	ctx := context.Background()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			s.Error("error", "key", "val")
+			s.Error(ctx, "error key=%s val=%s", "key", "val")
 		}
 	})
 	b.StopTimer()
@@ -207,36 +214,40 @@ func BenchmarkAsyncError(b *testing.B) {
 
 func BenchmarkSyncDebug(b *testing.B) {
 	s := makeSyncLogger(b, slog.LevelDebug)
+	ctx := context.Background()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			s.Debug("debug", "key", "val")
+			s.Debug(ctx, "debug key=%s val=%s", "key", "val")
 		}
 	})
 }
 
 func BenchmarkSyncInfo(b *testing.B) {
 	s := makeSyncLogger(b, slog.LevelDebug)
+	ctx := context.Background()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			s.Info("info", "key", "val")
+			s.Info(ctx, "info key=%s val=%s", "key", "val")
 		}
 	})
 }
 
 func BenchmarkSyncWarn(b *testing.B) {
 	s := makeSyncLogger(b, slog.LevelDebug)
+	ctx := context.Background()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			s.Warn("warn", "key", "val")
+			s.Warn(ctx, "warn key=%s val=%s", "key", "val")
 		}
 	})
 }
 
 func BenchmarkSyncError(b *testing.B) {
 	s := makeSyncLogger(b, slog.LevelDebug)
+	ctx := context.Background()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			s.Error("error", "key", "val")
+			s.Error(ctx, "error key=%s val=%s", "key", "val")
 		}
 	})
 }
@@ -248,8 +259,9 @@ func BenchmarkExtremeConcurrency(b *testing.B) {
 		b.Run(fmt.Sprintf("C%d", conc), func(b *testing.B) {
 			s := makeAsyncLogger(b, slog.LevelDebug, 8, 2000000)
 			defer s.Sync()
+			ctx := context.Background()
 			for i := 0; i < 1000; i++ {
-				s.Info("warmup", "i", i)
+				s.Info(ctx, "warmup i=%d", i)
 			}
 			time.Sleep(50 * time.Millisecond)
 			b.ResetTimer()
@@ -261,7 +273,7 @@ func BenchmarkExtremeConcurrency(b *testing.B) {
 				go func(id int) {
 					defer wg.Done()
 					for j := 0; j < perG; j++ {
-						s.Info("extreme", "g", id, "j", j)
+						s.Info(ctx, "extreme g=%d j=%d", id, j)
 					}
 				}(i)
 			}
@@ -279,15 +291,16 @@ func BenchmarkWorkerScalability(b *testing.B) {
 		b.Run(fmt.Sprintf("W%d", workers), func(b *testing.B) {
 			s := makeAsyncLogger(b, slog.LevelDebug, workers, 2000000)
 			defer s.Sync()
+			ctx := context.Background()
 			for i := 0; i < 1000; i++ {
-				s.Info("warmup", "i", i)
+				s.Info(ctx, "warmup i=%d", i)
 			}
 			time.Sleep(50 * time.Millisecond)
 			b.ResetTimer()
 
 			b.RunParallel(func(pb *testing.PB) {
 				for pb.Next() {
-					s.Info("scale", "key", "val")
+					s.Info(ctx, "scale key=%s val=%s", "key", "val")
 				}
 			})
 			b.StopTimer()
@@ -305,8 +318,7 @@ func BenchmarkPureSerialization(b *testing.B) {
 	b.Run("Debug", func(b *testing.B) {
 		b.RunParallel(func(pb *testing.PB) {
 			for pb.Next() {
-				r := slog.NewRecord(time.Now(), slog.LevelDebug, "pure-serial", 0)
-				r.Add("key", "val")
+				r := slog.NewRecord(time.Now(), slog.LevelDebug, "pure-serial key=val", 0)
 				_ = handler.Handle(ctx, r)
 			}
 		})
@@ -315,8 +327,7 @@ func BenchmarkPureSerialization(b *testing.B) {
 	b.Run("Info", func(b *testing.B) {
 		b.RunParallel(func(pb *testing.PB) {
 			for pb.Next() {
-				r := slog.NewRecord(time.Now(), slog.LevelInfo, "pure-serial", 0)
-				r.Add("key", "val")
+				r := slog.NewRecord(time.Now(), slog.LevelInfo, "pure-serial key=val", 0)
 				_ = handler.Handle(ctx, r)
 			}
 		})
@@ -325,59 +336,36 @@ func BenchmarkPureSerialization(b *testing.B) {
 	b.Run("Error", func(b *testing.B) {
 		b.RunParallel(func(pb *testing.PB) {
 			for pb.Next() {
-				r := slog.NewRecord(time.Now(), slog.LevelError, "pure-serial", 0)
-				r.Add("key", "val")
+				r := slog.NewRecord(time.Now(), slog.LevelError, "pure-serial key=val", 0)
 				_ = handler.Handle(ctx, r)
 			}
 		})
 	})
 }
 
-// --- 10M 吞吐挑战：高并发所有接口 + Context 版本 ---
+// --- 10M 吞吐挑战：高并发所有接口 ---
 
-// BenchmarkAllInterfaces10M 覆盖所有公开接口（Debug/Info/Warn/Error + Context 版本）
-// 目标：验证所有接口在 8 核心机器上吞吐量达到千万级别
 func BenchmarkAllInterfaces10M(b *testing.B) {
 	s := makeAsyncLogger(b, slog.LevelDebug, 8, 2000000)
 	defer s.Sync()
 
+	ctx := context.Background()
+
 	// 预热
 	for i := 0; i < 1000; i++ {
-		s.Info("warmup", "i", i)
+		s.Info(ctx, "warmup i=%d", i)
 	}
 	time.Sleep(50 * time.Millisecond)
 	b.ResetTimer()
 
-	ctx := context.Background()
 	b.RunParallel(func(pb *testing.PB) {
-		i := 0
 		for pb.Next() {
-			// 8 个接口轮流调用（Debug/Info/Warn/Error + 对应 Context 版本）
-			switch i % 8 {
-			case 0:
-				s.Debug("d", "k", "v", "n", i)
-			case 1:
-				s.DebugContext(ctx, "dc", "k", "v", "n", i)
-			case 2:
-				s.Info("i", "k", "v", "n", i)
-			case 3:
-				s.InfoContext(ctx, "ic", "k", "v", "n", i)
-			case 4:
-				s.Warn("w", "k", "v", "n", i)
-			case 5:
-				s.WarnContext(ctx, "wc", "k", "v", "n", i)
-			case 6:
-				s.Error("e", "k", "v", "n", i)
-			case 7:
-				s.ErrorContext(ctx, "ec", "k", "v", "n", i)
-			}
-			i++
+			s.Info(ctx, "i k=%s v=%s", "key", "val")
 		}
 	})
 	b.StopTimer()
 	s.Sync()
 
-	// 输出丢弃统计，便于排查缓冲区是否成为瓶颈
 	if d := s.ringBuf.Dropped(); d > 0 {
 		b.Logf("[10M challenge] dropped entries: %d", d)
 	}
@@ -387,15 +375,16 @@ func BenchmarkAllInterfaces10M(b *testing.B) {
 func BenchmarkThroughputMax(b *testing.B) {
 	s := makeAsyncLogger(b, slog.LevelDebug, 8, 2000000)
 	defer s.Sync()
+	ctx := context.Background()
 	for i := 0; i < 1000; i++ {
-		s.Info("warmup", "i", i)
+		s.Info(ctx, "warmup i=%d", i)
 	}
 	time.Sleep(50 * time.Millisecond)
 	b.ResetTimer()
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			s.Info("m")
+			s.Info(ctx, "m")
 		}
 	})
 	b.StopTimer()
@@ -408,14 +397,15 @@ func BenchmarkWorkerBatchSize(b *testing.B) {
 		b.Run(fmt.Sprintf("BS%d", bs), func(b *testing.B) {
 			s := makeAsyncLoggerWithBatch(b, slog.LevelDebug, 8, 2000000, bs)
 			defer s.Sync()
+			ctx := context.Background()
 			for i := 0; i < 1000; i++ {
-				s.Info("warmup", "i", i)
+				s.Info(ctx, "warmup i=%d", i)
 			}
 			time.Sleep(50 * time.Millisecond)
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {
 				for pb.Next() {
-					s.Info("bs", "k", "v")
+					s.Info(ctx, "bs key=%s val=%s", "k", "v")
 				}
 			})
 			b.StopTimer()
@@ -430,18 +420,221 @@ func BenchmarkShardCount(b *testing.B) {
 		b.Run(fmt.Sprintf("S%d", shards), func(b *testing.B) {
 			s := makeAsyncLogger(b, slog.LevelDebug, shards, 2000000)
 			defer s.Sync()
+			ctx := context.Background()
 			for i := 0; i < 1000; i++ {
-				s.Info("warmup", "i", i)
+				s.Info(ctx, "warmup i=%d", i)
 			}
 			time.Sleep(50 * time.Millisecond)
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {
 				for pb.Next() {
-					s.Info("s", "k", "v")
+					s.Info(ctx, "s key=%s val=%s", "k", "v")
 				}
 			})
 			b.StopTimer()
 			s.Sync()
 		})
 	}
+}
+
+// --- Printf 风格接口压测 ---
+
+// BenchmarkPrintfStyleAsync 异步模式 Printf 风格全级别压测
+func BenchmarkPrintfStyleAsync(b *testing.B) {
+	s := makeAsyncLogger(b, slog.LevelDebug, 8, 1000000)
+	defer s.Sync()
+
+	ctx := context.Background()
+	for i := 0; i < 1000; i++ {
+		s.Info(ctx, "warmup i=%d", i)
+	}
+	time.Sleep(50 * time.Millisecond)
+	b.ResetTimer()
+
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			switch i % 4 {
+			case 0:
+				s.Debug(ctx, "debug msg %d %s", i, "val")
+			case 1:
+				s.Info(ctx, "info msg %d %s", i, "val")
+			case 2:
+				s.Warn(ctx, "warn msg %d %s", i, "val")
+			case 3:
+				s.Error(ctx, "error msg %d %s", i, "val")
+			}
+			i++
+		}
+	})
+	b.StopTimer()
+	s.Sync()
+}
+
+// BenchmarkPrintfStyleSync 同步模式 Printf 风格全级别压测
+func BenchmarkPrintfStyleSync(b *testing.B) {
+	s := makeSyncLogger(b, slog.LevelDebug)
+	ctx := context.Background()
+
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			switch i % 4 {
+			case 0:
+				s.Debug(ctx, "debug msg %d", i)
+			case 1:
+				s.Info(ctx, "info msg %d", i)
+			case 2:
+				s.Warn(ctx, "warn msg %d", i)
+			case 3:
+				s.Error(ctx, "error msg %d", i)
+			}
+			i++
+		}
+	})
+}
+
+// BenchmarkPrintfLevelFiltered 延迟格式化收益：级别被过滤时避免 Sprintf 开销
+func BenchmarkPrintfLevelFiltered(b *testing.B) {
+	// 设置 Info 级别，Debug 调用会被过滤
+	s := makeAsyncLogger(b, slog.LevelInfo, 8, 1000000)
+	defer s.Sync()
+	ctx := context.Background()
+
+	b.Run("Debugf_Filtered", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			s.Debug(ctx, "debug msg %d %s", i, "val")
+		}
+	})
+
+	b.Run("Debug_KeyValue_Filtered", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			s.Debug(ctx, "debug msg key=%d val=%s", i, "val")
+		}
+	})
+}
+
+// BenchmarkPrintfComplexFormat 复杂格式化字符串压测
+func BenchmarkPrintfComplexFormat(b *testing.B) {
+	s := makeAsyncLogger(b, slog.LevelDebug, 8, 1000000)
+	defer s.Sync()
+
+	ctx := context.Background()
+	for i := 0; i < 1000; i++ {
+		s.Info(ctx, "warmup i=%d", i)
+	}
+	time.Sleep(50 * time.Millisecond)
+	b.ResetTimer()
+
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			s.Info(ctx, "request_id=%s user=%s action=%d status=%v latency=%.2fms",
+				"abc-123", "user42", i, true, 123.45)
+			i++
+		}
+	})
+	b.StopTimer()
+	s.Sync()
+}
+
+// BenchmarkAllInterfaces10MWithPrintf 10M 吞吐挑战：包含 Printf 风格接口
+func BenchmarkAllInterfaces10MWithPrintf(b *testing.B) {
+	s := makeAsyncLogger(b, slog.LevelDebug, 8, 2000000)
+	defer s.Sync()
+
+	ctx := context.Background()
+	for i := 0; i < 1000; i++ {
+		s.Info(ctx, "warmup i=%d", i)
+	}
+	time.Sleep(50 * time.Millisecond)
+	b.ResetTimer()
+
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			switch i % 4 {
+			case 0:
+				s.Debug(ctx, "d-%d-v", i)
+			case 1:
+				s.Info(ctx, "i-%d-v", i)
+			case 2:
+				s.Warn(ctx, "w-%d-v", i)
+			case 3:
+				s.Error(ctx, "e-%d-v", i)
+			}
+			i++
+		}
+	})
+	b.StopTimer()
+	s.Sync()
+
+	if d := s.ringBuf.Dropped(); d > 0 {
+		b.Logf("[10M+Printf challenge] dropped entries: %d", d)
+	}
+}
+
+// --- WithContext 性能压测 ---
+
+// BenchmarkWithContext 测试 WithContext 的性能开销
+func BenchmarkWithContext(b *testing.B) {
+	s := makeAsyncLogger(b, slog.LevelDebug, 8, 2000000)
+	defer s.Sync()
+
+	ctx := context.Background()
+	ctx = context.WithValue(ctx, "request_id", "test-123")
+	ctx = context.WithValue(ctx, "trace_id", "trace-456")
+
+	// 空 context（没有 trace 信息）
+	emptyCtx := context.Background()
+
+	b.Run("WithContext_Create_WithData", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_ = s.WithContext(ctx)
+		}
+	})
+
+	b.Run("WithContext_Create_EmptyCtx", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_ = s.WithContext(emptyCtx)
+		}
+	})
+
+	b.Run("WithContext_ThenLog", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			ctxLog := s.WithContext(ctx)
+			ctxLog.Info(ctx, "test message")
+		}
+	})
+
+	b.Run("DirectLog_WithData", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			s.Info(ctx, "test message")
+		}
+	})
+
+	b.Run("DirectLog_EmptyCtx", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			s.Info(emptyCtx, "test message")
+		}
+	})
+}
+
+// BenchmarkAsync 异步模式压测
+func BenchmarkAsync(b *testing.B) {
+	s := makeAsyncLogger(b, slog.LevelDebug, 8, 1000000)
+	defer s.Sync()
+	ctx := context.Background()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			s.Info(ctx, "async test")
+		}
+	})
 }

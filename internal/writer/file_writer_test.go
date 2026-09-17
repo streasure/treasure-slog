@@ -180,8 +180,7 @@ func TestRotate_ByTime(t *testing.T) {
 	// 等待超过轮转间隔
 	time.Sleep(200 * time.Millisecond)
 
-	// 写入触发时间轮转检查
-	fw.Write([]byte("after rotation"))
+	// 写入触发时间轮转检查查	fw.Write([]byte("after rotation"))
 
 	// 等待轮转完成
 	time.Sleep(50 * time.Millisecond)
@@ -233,8 +232,7 @@ func TestCleanup_MaxAge(t *testing.T) {
 	}
 	defer fw.Close()
 
-	// 触发一次轮转
-	fw.Write(bytes.Repeat([]byte("x"), 15))
+	// 触发一次轮	fw.Write(bytes.Repeat([]byte("x"), 15))
 	time.Sleep(10 * time.Millisecond)
 
 	// 等待超过 MaxAge
@@ -274,8 +272,7 @@ func TestCompress(t *testing.T) {
 	// 检查是否有 .gz 文件
 	gzFiles, _ := filepath.Glob(filepath.Join(dir, "app-*.log.gz"))
 	if len(gzFiles) == 0 {
-		// 压缩可能还在进行，再等一下
-		time.Sleep(1 * time.Second)
+		// 压缩可能还在进行，再等一		time.Sleep(1 * time.Second)
 		gzFiles, _ = filepath.Glob(filepath.Join(dir, "app-*.log.gz"))
 	}
 
@@ -366,7 +363,7 @@ func TestClose_Idempotent(t *testing.T) {
 		t.Fatalf("NewFileWriter: %v", err)
 	}
 
-	// 多次 Close 不 panic
+	// 多次 Close panic
 	fw.Close()
 	fw.Close()
 	fw.Close()

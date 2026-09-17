@@ -29,7 +29,7 @@ func TestWith_AttrsAppearInOutput(t *testing.T) {
 	s.handler = handler
 
 	derived := s.With("service", "api", "version", "1.0")
-	derived.Info("hello", "key", "val")
+	derived.Info(context.Background(), "hello key=%s", "val")
 
 	output := buf.String()
 	// 必须包含 With 的预置属性
@@ -39,17 +39,19 @@ func TestWith_AttrsAppearInOutput(t *testing.T) {
 	if !strings.Contains(output, `"version":"1.0"`) {
 		t.Errorf("With 的 version 属性丢失: %s", output)
 	}
-	// 必须包含调用时追加的属性
-	if !strings.Contains(output, `"key":"val"`) {
+	// 必须包含调用时追加的属性（Printf 风格嵌入 msg 中）
+	if !strings.Contains(output, "key=val") {
 		t.Errorf("调用时追加的 key 属性丢失: %s", output)
 	}
 	t.Logf("With 输出: %s", output)
 }
 
-// TestSync_ConcurrentSafe 验证并发 Sync 不 panic（修复 Sync 双关闭竞态）
+// TestSync_ConcurrentSafe 验证并发 Sync 无 panic（修复 Sync 双关闭竞态）
 func TestSync_ConcurrentSafe(t *testing.T) {
 	s, cleanup := lockContentionTest(t, slog.LevelDebug, 8, 1000000, 1024)
 	defer cleanup()
+
+	ctx := context.Background()
 
 	// 持续写入
 	stop := make(chan struct{})
@@ -63,7 +65,7 @@ func TestSync_ConcurrentSafe(t *testing.T) {
 				case <-stop:
 					return
 				default:
-					s.Info("concurrent-sync", "g", id)
+					s.Info(ctx, "concurrent-sync g=%d", id)
 				}
 			}
 		}(i)
@@ -149,7 +151,7 @@ func TestFieldCache_Removed(t *testing.T) {
 	// 这里仅验证 SLogger 不再有 fieldCache 字段，编译时已保证
 	s, cleanup := lockContentionTest(t, slog.LevelDebug, 2, 10000, 256)
 	defer cleanup()
-	s.Info("field-cache-removed", "k", "v")
+	s.Info(context.Background(), "field-cache-removed k=%s", "v")
 	_ = s.Sync()
 }
 
@@ -180,17 +182,18 @@ func (h *noopHook) Run(msg string, level string, args ...any) {}
 
 // TestWorkerRun_DeferOrder 验证 worker recover 在 wg.Done 之前
 func TestWorkerRun_DeferOrder(t *testing.T) {
-	// 通过构造一个会 panic 的 worker 来验证 recover 先生效
+	// 通过构造一个会 panic 的 worker 来验证 recover 先执行
 	s, cleanup := lockContentionTest(t, slog.LevelDebug, 2, 10000, 256)
 	defer cleanup()
 
+	ctx := context.Background()
 	// 让 worker 正常工作一段时间
 	for i := 0; i < 100; i++ {
-		s.Info("defer-order", "i", i)
+		s.Info(ctx, "defer-order i=%d", i)
 	}
 	time.Sleep(10 * time.Millisecond)
 	_ = s.Sync()
-	// 若 defer 顺序错误，wg.Done 可能在 panic 未捕获时执行，导致死锁
+	// 如果 defer 顺序错误，wg.Done 可能在 panic 未捕获时执行，导致死锁
 	// 这里 Sync 能正常返回说明 defer 顺序正确
 }
 
@@ -212,7 +215,7 @@ func TestContext_LogWithTraceIDs(t *testing.T) {
 	ctx := context.WithValue(context.Background(), "request_id", "req-abc-123")
 	ctx = context.WithValue(ctx, "trace_id", "trace-xyz")
 	derived := s.WithContext(ctx)
-	derived.Info("with-trace")
+	derived.Info(context.Background(), "with-trace")
 
 	output := buf.String()
 	if !strings.Contains(output, `"request_id":"req-abc-123"`) {

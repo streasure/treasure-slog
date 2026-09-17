@@ -12,8 +12,8 @@ import (
 
 func main() {
 	// 显式初始化全局 logger（首次 New 调用会设置全局实例）
-	// 配置路径：默认 configs/config.yaml，可通过第一个位置参数指定
-	configPath := "configs/config.yaml"
+	// 配置路径：默认 configs/tlog.yaml，可通过第一个位置参数指定
+	configPath := "configs/tlog.yaml"
 	if len(os.Args) > 1 {
 		configPath = os.Args[1]
 	}
@@ -39,7 +39,7 @@ func main() {
 
 	// 启动 HTTP 服务器
 	if err := http.ListenAndServe(addr, nil); err != nil && err != http.ErrServerClosed {
-		logger.Error("服务器启动失败", "error", err)
+		logger.Error(context.Background(), "服务器启动失败 error=%v", err)
 	}
 
 	fmt.Println("服务器已停止")
@@ -50,15 +50,11 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
 	// 创建带上下文的日志记录器
 	ctx := r.Context()
 	ctx = context.WithValue(ctx, "request_id", generateRequestID())
-	ctx = context.WithValue(ctx, "client_ip", r.RemoteAddr)
 	ctxLog := logger.WithContext(ctx)
 
 	// 记录请求
-	ctxLog.Info("HTTP 请求",
-		"method", r.Method,
-		"path", r.URL.Path,
-		"user_agent", r.UserAgent(),
-	)
+	ctxLog.Info(ctx, "HTTP 请求 method=%s path=%s user_agent=%s",
+		r.Method, r.URL.Path, r.UserAgent())
 
 	// 模拟处理时间
 	time.Sleep(10 * time.Millisecond)
@@ -70,11 +66,8 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "请求 ID: %s\n", ctx.Value("request_id"))
 
 	// 记录响应
-	ctxLog.Info("HTTP 响应",
-		"status", http.StatusOK,
-		"method", r.Method,
-		"path", r.URL.Path,
-	)
+	ctxLog.Info(ctx, "HTTP 响应 status=%d method=%s path=%s",
+		http.StatusOK, r.Method, r.URL.Path)
 }
 
 // handleAPI 处理 API 请求
@@ -85,19 +78,14 @@ func handleAPI(w http.ResponseWriter, r *http.Request) {
 	ctxLog := logger.WithContext(ctx)
 
 	// 记录请求
-	ctxLog.Info("API 请求",
-		"method", r.Method,
-		"path", r.URL.Path,
-	)
+	ctxLog.Info(ctx, "API 请求 method=%s path=%s", r.Method, r.URL.Path)
 
 	// 模拟 API 处理
 	time.Sleep(50 * time.Millisecond)
 
 	// 记录处理信息
-	ctxLog.Debug("API 处理中",
-		"param1", r.URL.Query().Get("param1"),
-		"param2", r.URL.Query().Get("param2"),
-	)
+	ctxLog.Debug(ctx, "API 处理中 param1=%s param2=%s",
+		r.URL.Query().Get("param1"), r.URL.Query().Get("param2"))
 
 	// 返回 JSON 响应
 	w.Header().Set("Content-Type", "application/json")
@@ -105,9 +93,7 @@ func handleAPI(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, `{"status":"success","message":"API 调用成功","request_id":"%s"}`, ctx.Value("request_id"))
 
 	// 记录响应
-	ctxLog.Info("API 响应",
-		"status", http.StatusOK,
-	)
+	ctxLog.Info(ctx, "API 响应 status=%d", http.StatusOK)
 }
 
 // handleError 处理错误请求
@@ -118,20 +104,14 @@ func handleError(w http.ResponseWriter, r *http.Request) {
 	ctxLog := logger.WithContext(ctx)
 
 	// 记录请求
-	ctxLog.Info("错误请求",
-		"method", r.Method,
-		"path", r.URL.Path,
-	)
+	ctxLog.Info(ctx, "错误请求 method=%s path=%s", r.Method, r.URL.Path)
 
 	// 模拟错误
 	time.Sleep(20 * time.Millisecond)
 
 	// 记录错误
 	err := fmt.Errorf("模拟的服务器错误")
-	ctxLog.Error("处理请求时出错",
-		"error", err,
-		"path", r.URL.Path,
-	)
+	ctxLog.Error(ctx, "处理请求时出错 error=%v path=%s", err, r.URL.Path)
 
 	// 返回错误响应
 	w.Header().Set("Content-Type", "application/json")

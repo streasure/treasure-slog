@@ -43,23 +43,24 @@ func TestLogger(t *testing.T) {
 				t.Fatalf("Failed to create logger: %v", err)
 			}
 
-			logger.Debug("Debug message", "key1", "value1", "key2", 42)
-			logger.Info("Info message", "key1", "value1", "key2", 42)
-			logger.Warn("Warn message", "key1", "value1", "key2", 42)
-			logger.Error("Error message", "key1", "value1", "key2", 42)
+			ctx := context.Background()
+			logger.Debug(ctx, "Debug message key1=%s key2=%d", "value1", 42)
+			logger.Info(ctx, "Info message key1=%s key2=%d", "value1", 42)
+			logger.Warn(ctx, "Warn message key1=%s key2=%d", "value1", 42)
+			logger.Error(ctx, "Error message key1=%s key2=%d", "value1", 42)
 
 			withLogger := logger.With("context", "test")
-			withLogger.Debug("Debug message with context", "key", "value")
-			withLogger.Info("Info message with context", "key", "value")
-			withLogger.Warn("Warn message with context", "key", "value")
-			withLogger.Error("Error message with context", "key", "value")
+			withLogger.Debug(ctx, "Debug message with context key=%s", "value")
+			withLogger.Info(ctx, "Info message with context key=%s", "value")
+			withLogger.Warn(ctx, "Warn message with context key=%s", "value")
+			withLogger.Error(ctx, "Error message with context key=%s", "value")
 
-			ctx := context.WithValue(context.Background(), "test-key", "test-value")
+			ctx = context.WithValue(ctx, "test-key", "test-value")
 			ctxLogger := logger.WithContext(ctx)
-			ctxLogger.Debug("Debug message with context object", "key", "value")
-			ctxLogger.Info("Info message with context object", "key", "value")
-			ctxLogger.Warn("Warn message with context object", "key", "value")
-			ctxLogger.Error("Error message with context object", "key", "value")
+			ctxLogger.Debug(ctx, "Debug message with context object key=%s", "value")
+			ctxLogger.Info(ctx, "Info message with context object key=%s", "value")
+			ctxLogger.Warn(ctx, "Warn message with context object key=%s", "value")
+			ctxLogger.Error(ctx, "Error message with context object key=%s", "value")
 
 			err = logger.Sync()
 			if err != nil {
@@ -91,7 +92,8 @@ func TestLoggerWithDefaultLevel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create logger: %v", err)
 	}
-	logger.Info("Info message with default level", "key", "value")
+	ctx := context.Background()
+	logger.Info(ctx, "Info message with default level key=%s", "value")
 }
 
 func TestGlobalLogger(t *testing.T) {
@@ -121,20 +123,20 @@ func TestGlobalLogger(t *testing.T) {
 	}
 	globalLogger = l
 
-	Info("Global Info function", "key", "value")
-	Debug("Global Debug function", "key", "value")
-	Warn("Global Warn function", "key", "value")
-	Error("Global Error function", "key", "value")
+	ctx := context.Background()
+	Info(ctx, "Global Info function key=%s", "value")
+	Debug(ctx, "Global Debug function key=%s", "value")
+	Warn(ctx, "Global Warn function key=%s", "value")
+	Error(ctx, "Global Error function key=%s", "value")
 
 	withLogger := With("context", "test")
 	if withLogger != nil {
-		withLogger.Info("Global With function")
+		withLogger.Info(ctx, "Global With function")
 	}
 
-	ctx := context.Background()
 	ctxLogger := WithContext(ctx)
 	if ctxLogger != nil {
-		ctxLogger.Info("Global WithContext function")
+		ctxLogger.Info(ctx, "Global WithContext function")
 	}
 
 	SetLevel("debug")
@@ -191,7 +193,8 @@ func TestHookFunction(t *testing.T) {
 	}
 
 	loggerWithHook := logger.AddHook(testHook)
-	loggerWithHook.Info("Test message", "key", "value")
+	ctx := context.Background()
+	loggerWithHook.Info(ctx, "Test message key=%s", "value")
 
 	err = loggerWithHook.Sync()
 	if err != nil {
@@ -232,7 +235,7 @@ func TestContextAutoInject(t *testing.T) {
 	ctx = context.WithValue(ctx, "span_id", "test-span-id")
 
 	ctxLogger := logger.WithContext(ctx)
-	ctxLogger.Info("Test message with context")
+	ctxLogger.Info(ctx, "Test message with context")
 }
 
 func TestSync(t *testing.T) {

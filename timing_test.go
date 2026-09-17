@@ -1,6 +1,7 @@
 package logger
 
 import (
+	"context"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -25,11 +26,12 @@ func TestTimingStats(t *testing.T) {
 	handler := NewFastHandler(cw, s.level)
 	s.logger = slog.New(handler)
 
+	ctx := context.Background()
 	for i := 0; i < 100; i++ {
-		s.Info("timing-test-msg", "index", i)
+		s.Info(ctx, "timing-test-msg index=%d", i)
 	}
 	for i := 0; i < 50; i++ {
-		s.Debug("should-be-filtered", "index", i)
+		s.Debug(ctx, "should-be-filtered index=%d", i)
 	}
 
 	if timing.logCalls.Load() != 150 {
@@ -44,7 +46,7 @@ func TestTimingStats(t *testing.T) {
 	if timing.entriesHandled.Load() != 100 {
 		t.Errorf("entriesHandled = %d, want 100", timing.entriesHandled.Load())
 	}
-	// 耗时统计验证（>= 0，Windows 定时器精度可能导致极快操作计为 0）
+	// 耗时统计验证（>= 0，Windows 定时器精度可能导致极快操作计入 0）
 	if timing.logTotalNS.Load() < 0 {
 		t.Errorf("logTotalNS should be >= 0, got %d", timing.logTotalNS.Load())
 	}
@@ -74,8 +76,9 @@ func TestTimingDisabled(t *testing.T) {
 	handler := NewFastHandler(cw, s.level)
 	s.logger = slog.New(handler)
 
+	ctx := context.Background()
 	for i := 0; i < 10; i++ {
-		s.Info("disabled-test", "i", i)
+		s.Info(ctx, "disabled-test i=%d", i)
 	}
 	if timing.logTotalNS.Load() != 0 {
 		t.Errorf("logTotalNS should be 0 when disabled, got %d", timing.logTotalNS.Load())
@@ -114,8 +117,9 @@ func TestTimingAsyncPath(t *testing.T) {
 		s.workers[i].start()
 	}
 
+	ctx := context.Background()
 	for i := 0; i < 100; i++ {
-		s.Info("async-timing-test", "index", i)
+		s.Info(ctx, "async-timing-test index=%d", i)
 	}
 	s.Sync()
 

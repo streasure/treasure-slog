@@ -37,7 +37,7 @@ type FileWriterConfig struct {
 type FileWriter struct {
 	cfg FileWriterConfig
 
-	// --- 运行时状态（受 mu 保护） ---
+	// --- 运行时状态（由 mu 保护）---
 	mu          sync.Mutex
 	file        *os.File // 当前写入的文件
 	currentSize int64    // 当前文件已写字节数
@@ -46,8 +46,8 @@ type FileWriter struct {
 
 	// --- 后台协程 ---
 	ticker     *time.Ticker
-	compressCh chan string    // 待压缩文件路径队列
-	done       chan struct{}  // 关闭信号
+	compressCh chan string     // 待压缩文件路径队列
+	done       chan struct{}   // 关闭信号
 	bgWg       sync.WaitGroup // 等待后台协程退出
 	once       sync.Once
 }
@@ -123,7 +123,7 @@ func (fw *FileWriter) Write(p []byte) (n int, err error) {
 		return 0, errFileWriterClosed
 	}
 
-	// 写入前检查已经达到限制的文件。
+	// 写入前检查已经达到限制的文件
 	if fw.needRotateBySize() {
 		if rotateErr := fw.rotate(); rotateErr != nil {
 			fmt.Fprintf(os.Stderr, "[tlog] rotate failed: %v\n", rotateErr)
@@ -133,7 +133,7 @@ func (fw *FileWriter) Write(p []byte) (n int, err error) {
 	n, err = fw.file.Write(p)
 	fw.currentSize += int64(n)
 
-	// 写入后立即轮转，保持超过大小限制的单次写入也能触发轮转。
+	// 写入后立即轮转，保持超过大小限制的单次写入也能触发轮转
 	if fw.needRotateBySize() {
 		if rotateErr := fw.rotate(); rotateErr != nil {
 			fmt.Fprintf(os.Stderr, "[tlog] rotate failed: %v\n", rotateErr)
@@ -189,7 +189,7 @@ func (fw *FileWriter) needRotateBySize() bool {
 	return fw.cfg.MaxSize > 0 && fw.currentSize >= fw.cfg.MaxSize
 }
 
-// needRotateByTime 仅检查时间轮转（供 background goroutine 使用）
+// needRotateByTime 仅检查时间轮转（由 background goroutine 使用）
 func (fw *FileWriter) needRotateByTime() bool {
 	return fw.cfg.Interval > 0 && time.Since(fw.createdAt) >= fw.cfg.Interval
 }
@@ -246,7 +246,7 @@ func (fw *FileWriter) rotate() error {
 // --- 清理逻辑 ---
 
 // cleanup 清理过期的轮转文件
-// 按修改时间排序，删除超过 maxBackups 或 maxAge 的文件
+// 按修改时间排序，删除超过 maxBackups 和 maxAge 的文件
 func (fw *FileWriter) cleanup() {
 	// 收集所有轮转文件（匹配 pattern: base-*.ext，排除当前文件）
 	pattern := filepath.Join(fw.cfg.Dir, fw.cfg.BaseName+"-*"+fw.cfg.Ext)

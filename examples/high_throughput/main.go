@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"runtime"
@@ -12,8 +13,8 @@ import (
 
 func main() {
 	// 显式初始化全局 logger（首次 New 调用会设置全局实例）
-	// 配置路径：默认 configs/config.yaml，可通过第一个位置参数指定
-	configPath := "configs/config.yaml"
+	// 配置路径：默认 configs/tlog.yaml，可通过第一个位置参数指定
+	configPath := "configs/tlog.yaml"
 	if len(os.Args) > 1 {
 		configPath = os.Args[1]
 	}
@@ -35,13 +36,14 @@ func main() {
 
 	// 预热
 	fmt.Println("预热中...")
+	ctx := context.Background()
 	for i := 0; i < 1000; i++ {
-		logger.Info("Warmup", "i", i)
+		logger.Info(ctx, "Warmup i=%d", i)
 	}
 	time.Sleep(100 * time.Millisecond)
 
 	// 开始测试
-	fmt.Println("开始测试...")
+	fmt.Println("开始测试中...")
 	start := time.Now()
 
 	// 并发测试
@@ -53,12 +55,8 @@ func main() {
 		go func(id int) {
 			defer wg.Done()
 			for j := 0; j < logsPerGoroutine; j++ {
-				logger.Info("High throughput test",
-					"goroutine", id,
-					"iteration", j,
-					"timestamp", time.Now().UnixNano(),
-					"data", "test data for high throughput benchmarking",
-				)
+				logger.Info(ctx, "High throughput test goroutine=%d iteration=%d timestamp=%d data=%s",
+					id, j, time.Now().UnixNano(), "test data for high throughput benchmarking")
 			}
 		}(i)
 	}

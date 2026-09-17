@@ -2,21 +2,19 @@ package logger
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"sync"
 	"testing"
 	"time"
 )
 
-// TestPanicRobustness 全面测试日志库在各种极端情况下的panic鲁棒性
-// 确保除了物理机宕机外，任何情况都不会导致外部调用panic
+// TestPanicRobustness 全面测试日志库在各种极端情况下的panic鲁棒性// 确保除了物理机宕机外，任何情况都不会导致外部调用panic
 func TestPanicRobustness(t *testing.T) {
 	tests := []struct {
 		name string
 		fn   func() error
 	}{
-		// --- nil/零值 SLogger ---
+		// --- nil/零值SLogger ---
 		{
 			name: "NilSLogger",
 			fn: func() error {
@@ -39,10 +37,10 @@ func TestPanicRobustness(t *testing.T) {
 					}
 				}()
 				var l *SLogger
-				l.Debug("debug")
-				l.Info("info")
-				l.Warn("warn")
-				l.Error("error")
+				l.Debug(context.Background(), "debug")
+				l.Info(context.Background(), "info")
+				l.Warn(context.Background(), "warn")
+				l.Error(context.Background(), "error")
 				l.With("k", "v")
 				l.WithContext(context.Background())
 				l.AddHook(nil)
@@ -61,7 +59,7 @@ func TestPanicRobustness(t *testing.T) {
 					}
 				}()
 				l := &SLogger{}
-				l.Error("test error", "key", "value")
+				l.Error(context.Background(), "test error key=%s", "value")
 				l.Sync()
 				return nil
 			},
@@ -76,12 +74,12 @@ func TestPanicRobustness(t *testing.T) {
 						t.Errorf("ErrorWithStacktrace panic: %v", r)
 					}
 				}()
-				logger, err := New("configs/config.yaml")
+				logger, err := New("configs/tlog.yaml")
 				if err != nil {
 					return nil
 				}
 				defer logger.Sync()
-				logger.Error("test error with stacktrace", "key", "value")
+				logger.Error(context.Background(), "test error with stacktrace key=%s", "value")
 				return nil
 			},
 		},
@@ -93,13 +91,13 @@ func TestPanicRobustness(t *testing.T) {
 						t.Errorf("ErrorWithManyArgs panic: %v", r)
 					}
 				}()
-				logger, err := New("configs/config.yaml")
+				logger, err := New("configs/tlog.yaml")
 				if err != nil {
 					return nil
 				}
 				defer logger.Sync()
-				args := []any{"k1", "v1", "k2", "v2", "k3", "v3", "k4", "v4", "k5", "v5", "k6", "v6"}
-				logger.Error("test error with many args", args...)
+				logger.Error(context.Background(), "test error with many args k1=%s k2=%s k3=%s k4=%s k5=%s k6=%s",
+					"v1", "v2", "v3", "v4", "v5", "v6")
 				return nil
 			},
 		},
@@ -111,12 +109,12 @@ func TestPanicRobustness(t *testing.T) {
 						t.Errorf("ErrorWithZeroArgs panic: %v", r)
 					}
 				}()
-				logger, err := New("configs/config.yaml")
+				logger, err := New("configs/tlog.yaml")
 				if err != nil {
 					return nil
 				}
 				defer logger.Sync()
-				logger.Error("test error with zero args")
+				logger.Error(context.Background(), "test error with zero args")
 				return nil
 			},
 		},
@@ -128,17 +126,17 @@ func TestPanicRobustness(t *testing.T) {
 						t.Errorf("ErrorWithNilContext panic: %v", r)
 					}
 				}()
-				logger, err := New("configs/config.yaml")
+				logger, err := New("configs/tlog.yaml")
 				if err != nil {
 					return nil
 				}
 				defer logger.Sync()
-				logger.ErrorContext(nil, "test error with nil context", "key", "value")
+				logger.Error(nil, "test error with nil context key=%s", "value")
 				return nil
 			},
 		},
 
-		// --- 奇数参数（slog key-value对齐问题）---
+		// --- 奇数参数（slog key-value对齐问题）--
 		{
 			name: "ErrorWithOddArgs_1",
 			fn: func() error {
@@ -147,12 +145,12 @@ func TestPanicRobustness(t *testing.T) {
 						t.Errorf("ErrorWithOddArgs_1 panic: %v", r)
 					}
 				}()
-				logger, err := New("configs/config.yaml")
+				logger, err := New("configs/tlog.yaml")
 				if err != nil {
 					return nil
 				}
 				defer logger.Sync()
-				logger.Error("test", "k1")
+				logger.Error(context.Background(), "test k1")
 				return nil
 			},
 		},
@@ -164,12 +162,12 @@ func TestPanicRobustness(t *testing.T) {
 						t.Errorf("ErrorWithOddArgs_3 panic: %v", r)
 					}
 				}()
-				logger, err := New("configs/config.yaml")
+				logger, err := New("configs/tlog.yaml")
 				if err != nil {
 					return nil
 				}
 				defer logger.Sync()
-				logger.Error("test", "k1", "v1", "k2")
+				logger.Error(context.Background(), "test k1=%s k2", "v1")
 				return nil
 			},
 		},
@@ -181,12 +179,12 @@ func TestPanicRobustness(t *testing.T) {
 						t.Errorf("ErrorWithOddArgs_5 panic: %v", r)
 					}
 				}()
-				logger, err := New("configs/config.yaml")
+				logger, err := New("configs/tlog.yaml")
 				if err != nil {
 					return nil
 				}
 				defer logger.Sync()
-				logger.Error("test", "k1", "v1", "k2", "v2", "k3")
+				logger.Error(context.Background(), "test k1=%s k2=%s k3", "v1", "v2")
 				return nil
 			},
 		},
@@ -198,20 +196,20 @@ func TestPanicRobustness(t *testing.T) {
 						t.Errorf("AllLevelsWithOddArgs panic: %v", r)
 					}
 				}()
-				logger, err := New("configs/config.yaml")
+				logger, err := New("configs/tlog.yaml")
 				if err != nil {
 					return nil
 				}
 				defer logger.Sync()
-				logger.Debug("debug", "k1")
-				logger.Info("info", "k1", "v1", "k2")
-				logger.Warn("warn", "k1", "v1", "k2", "v2", "k3")
-				logger.Error("error", "k1")
+				logger.Debug(context.Background(), "debug k1")
+				logger.Info(context.Background(), "info k1=%s k2", "v1")
+				logger.Warn(context.Background(), "warn k1=%s k2=%s k3", "v1", "v2")
+				logger.Error(context.Background(), "error k1")
 				return nil
 			},
 		},
 
-		// --- atomic level 安全性 ---
+		// --- atomic level 安全性---
 		{
 			name: "SetLevelWithInvalidValue",
 			fn: func() error {
@@ -220,13 +218,13 @@ func TestPanicRobustness(t *testing.T) {
 						t.Errorf("SetLevelWithInvalidValue panic: %v", r)
 					}
 				}()
-				logger, err := New("configs/config.yaml")
+				logger, err := New("configs/tlog.yaml")
 				if err != nil {
 					return nil
 				}
 				defer logger.Sync()
 				logger.SetLevel("error")
-				logger.Error("test after set level", "key", "value")
+				logger.Error(context.Background(), "test after set level key=%s", "value")
 				return nil
 			},
 		},
@@ -238,13 +236,13 @@ func TestPanicRobustness(t *testing.T) {
 						t.Errorf("SetLevelWithEmptyString panic: %v", r)
 					}
 				}()
-				logger, err := New("configs/config.yaml")
+				logger, err := New("configs/tlog.yaml")
 				if err != nil {
 					return nil
 				}
 				defer logger.Sync()
 				logger.SetLevel("")
-				logger.Info("test after empty level", "key", "value")
+				logger.Info(context.Background(), "test after empty level key=%s", "value")
 				return nil
 			},
 		},
@@ -256,13 +254,13 @@ func TestPanicRobustness(t *testing.T) {
 						t.Errorf("SetLevelWithRandomString panic: %v", r)
 					}
 				}()
-				logger, err := New("configs/config.yaml")
+				logger, err := New("configs/tlog.yaml")
 				if err != nil {
 					return nil
 				}
 				defer logger.Sync()
 				logger.SetLevel("notalevel")
-				logger.Info("test after random level", "key", "value")
+				logger.Info(context.Background(), "test after random level key=%s", "value")
 				return nil
 			},
 		},
@@ -276,7 +274,7 @@ func TestPanicRobustness(t *testing.T) {
 						t.Errorf("ConcurrentErrorCalls panic: %v", r)
 					}
 				}()
-				logger, err := New("configs/config.yaml")
+				logger, err := New("configs/tlog.yaml")
 				if err != nil {
 					return nil
 				}
@@ -286,7 +284,7 @@ func TestPanicRobustness(t *testing.T) {
 					wg.Add(1)
 					go func(id int) {
 						defer wg.Done()
-						logger.Error(fmt.Sprintf("concurrent error %d", id), "goroutine", id)
+						logger.Error(context.Background(), "concurrent error %d goroutine=%d", id, id)
 					}(i)
 				}
 				wg.Wait()
@@ -301,7 +299,7 @@ func TestPanicRobustness(t *testing.T) {
 						t.Errorf("ConcurrentMixedLevelCalls panic: %v", r)
 					}
 				}()
-				logger, err := New("configs/config.yaml")
+				logger, err := New("configs/tlog.yaml")
 				if err != nil {
 					return nil
 				}
@@ -313,13 +311,13 @@ func TestPanicRobustness(t *testing.T) {
 						defer wg.Done()
 						switch id % 4 {
 						case 0:
-							logger.Debug("debug", "id", id)
+							logger.Debug(context.Background(), "debug id=%d", id)
 						case 1:
-							logger.Info("info", "id", id)
+							logger.Info(context.Background(), "info id=%d", id)
 						case 2:
-							logger.Warn("warn", "id", id)
+							logger.Warn(context.Background(), "warn id=%d", id)
 						case 3:
-							logger.Error("error", "id", id)
+							logger.Error(context.Background(), "error id=%d", id)
 						}
 					}(i)
 				}
@@ -335,7 +333,7 @@ func TestPanicRobustness(t *testing.T) {
 						t.Errorf("ConcurrentSetLevelAndLog panic: %v", r)
 					}
 				}()
-				logger, err := New("configs/config.yaml")
+				logger, err := New("configs/tlog.yaml")
 				if err != nil {
 					return nil
 				}
@@ -345,7 +343,7 @@ func TestPanicRobustness(t *testing.T) {
 					wg.Add(2)
 					go func(id int) {
 						defer wg.Done()
-						logger.Error("error", "id", id)
+						logger.Error(context.Background(), "error id=%d", id)
 					}(i)
 					go func(id int) {
 						defer wg.Done()
@@ -367,7 +365,7 @@ func TestPanicRobustness(t *testing.T) {
 						t.Errorf("ErrorWithPanicHook panic: %v", r)
 					}
 				}()
-				logger, err := New("configs/config.yaml")
+				logger, err := New("configs/tlog.yaml")
 				if err != nil {
 					return nil
 				}
@@ -378,7 +376,7 @@ func TestPanicRobustness(t *testing.T) {
 					},
 				}
 				loggerWithHook := logger.AddHook(panicHook)
-				loggerWithHook.Error("test error with panic hook", "key", "value")
+				loggerWithHook.Error(context.Background(), "test error with panic hook key=%s", "value")
 				return nil
 			},
 		},
@@ -390,7 +388,7 @@ func TestPanicRobustness(t *testing.T) {
 						t.Errorf("MultipleHooksWithPanic panic: %v", r)
 					}
 				}()
-				logger, err := New("configs/config.yaml")
+				logger, err := New("configs/tlog.yaml")
 				if err != nil {
 					return nil
 				}
@@ -411,7 +409,7 @@ func TestPanicRobustness(t *testing.T) {
 					},
 				}
 				l := logger.AddHook(panicHook1).AddHook(normalHook).AddHook(panicHook2)
-				l.Error("test with multiple hooks", "key", "value")
+				l.Error(context.Background(), "test with multiple hooks key=%s", "value")
 				return nil
 			},
 		},
@@ -423,18 +421,18 @@ func TestPanicRobustness(t *testing.T) {
 						t.Errorf("AddNilHook panic: %v", r)
 					}
 				}()
-				logger, err := New("configs/config.yaml")
+				logger, err := New("configs/tlog.yaml")
 				if err != nil {
 					return nil
 				}
 				defer logger.Sync()
 				l := logger.AddHook(nil)
-				l.Error("test with nil hook", "key", "value")
+				l.Error(context.Background(), "test with nil hook key=%s", "value")
 				return nil
 			},
 		},
 
-		// --- With/WithContext 安全性 ---
+		// --- With/WithContext 安全性---
 		{
 			name: "WithOddArgs",
 			fn: func() error {
@@ -443,13 +441,13 @@ func TestPanicRobustness(t *testing.T) {
 						t.Errorf("WithOddArgs panic: %v", r)
 					}
 				}()
-				logger, err := New("configs/config.yaml")
+				logger, err := New("configs/tlog.yaml")
 				if err != nil {
 					return nil
 				}
 				defer logger.Sync()
 				l := logger.With("k1")
-				l.Error("test with odd args", "key", "value")
+				l.Error(context.Background(), "test with odd args key=%s", "value")
 				return nil
 			},
 		},
@@ -461,18 +459,18 @@ func TestPanicRobustness(t *testing.T) {
 						t.Errorf("WithContextNil panic: %v", r)
 					}
 				}()
-				logger, err := New("configs/config.yaml")
+				logger, err := New("configs/tlog.yaml")
 				if err != nil {
 					return nil
 				}
 				defer logger.Sync()
 				l := logger.WithContext(nil)
-				l.Error("test with nil context", "key", "value")
+				l.Error(context.Background(), "test with nil context key=%s", "value")
 				return nil
 			},
 		},
 
-		// --- Sync安全性 ---
+		// --- Sync安全性---
 		{
 			name: "SyncMultipleTimes",
 			fn: func() error {
@@ -481,7 +479,7 @@ func TestPanicRobustness(t *testing.T) {
 						t.Errorf("SyncMultipleTimes panic: %v", r)
 					}
 				}()
-				logger, err := New("configs/config.yaml")
+				logger, err := New("configs/tlog.yaml")
 				if err != nil {
 					return nil
 				}
@@ -509,7 +507,7 @@ func TestPanicRobustness(t *testing.T) {
 			},
 		},
 
-		// --- GetLevel安全性 ---
+		// --- GetLevel安全性---
 		{
 			name: "GetLevelOnUninitialized",
 			fn: func() error {
@@ -542,15 +540,17 @@ func TestPanicRobustness(t *testing.T) {
 // BenchmarkErrorPanicStress Error路径panic压力测试
 // 确保在高并发Error调用下绝对不会panic
 func BenchmarkErrorPanicStress(b *testing.B) {
-	logger, err := New("configs/config.yaml")
+	logger, err := New("configs/tlog.yaml")
 	if err != nil {
 		b.Fatalf("Failed to create logger: %v", err)
 	}
 	defer logger.Sync()
 
+	ctx := context.Background()
+
 	// 预热
 	for i := 0; i < 1000; i++ {
-		logger.Error("warmup", "i", i)
+		logger.Error(ctx, "warmup i=%d", i)
 	}
 
 	b.ResetTimer()
@@ -566,17 +566,17 @@ func BenchmarkErrorPanicStress(b *testing.B) {
 			// 测试各种参数数量的Error调用
 			switch i % 6 {
 			case 0:
-				logger.Error("error with no args")
+				logger.Error(ctx, "error with no args")
 			case 1:
-				logger.Error("error with 1 arg", "k1")
+				logger.Error(ctx, "error with 1 arg k1")
 			case 2:
-				logger.Error("error with 2 args", "k1", "v1")
+				logger.Error(ctx, "error with 2 args k1=%s", "v1")
 			case 3:
-				logger.Error("error with 3 args", "k1", "v1", "k2")
+				logger.Error(ctx, "error with 3 args k1=%s k2", "v1")
 			case 4:
-				logger.Error("error with 4 args", "k1", "v1", "k2", "v2")
+				logger.Error(ctx, "error with 4 args k1=%s k2=%s", "v1", "v2")
 			case 5:
-				logger.Error("error with many args", "k1", "v1", "k2", "v2", "k3", "v3", "k4", "v4")
+				logger.Error(ctx, "error with many args k1=%s k2=%s k3=%s k4=%s", "v1", "v2", "v3", "v4")
 			}
 			i++
 		}
@@ -587,7 +587,7 @@ func BenchmarkErrorPanicStress(b *testing.B) {
 
 // BenchmarkErrorPanicStressWithContext Error路径带context的panic压力测试
 func BenchmarkErrorPanicStressWithContext(b *testing.B) {
-	logger, err := New("configs/config.yaml")
+	logger, err := New("configs/tlog.yaml")
 	if err != nil {
 		b.Fatalf("Failed to create logger: %v", err)
 	}
@@ -597,7 +597,7 @@ func BenchmarkErrorPanicStressWithContext(b *testing.B) {
 	ctx = context.WithValue(ctx, "request_id", "test-req-id")
 
 	for i := 0; i < 1000; i++ {
-		logger.ErrorContext(ctx, "warmup", "i", i)
+		logger.Error(ctx, "warmup i=%d", i)
 	}
 
 	b.ResetTimer()
@@ -609,7 +609,7 @@ func BenchmarkErrorPanicStressWithContext(b *testing.B) {
 		}()
 
 		for pb.Next() {
-			logger.ErrorContext(ctx, "error with context", "key", "value")
+			logger.Error(ctx, "error with context key=%s", "value")
 		}
 	})
 	b.StopTimer()
@@ -618,11 +618,13 @@ func BenchmarkErrorPanicStressWithContext(b *testing.B) {
 
 // BenchmarkConcurrentMixedStress 混合级别并发压力测试
 func BenchmarkConcurrentMixedStress(b *testing.B) {
-	logger, err := New("configs/config.yaml")
+	logger, err := New("configs/tlog.yaml")
 	if err != nil {
 		b.Fatalf("Failed to create logger: %v", err)
 	}
 	defer logger.Sync()
+
+	ctx := context.Background()
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -636,21 +638,21 @@ func BenchmarkConcurrentMixedStress(b *testing.B) {
 		for pb.Next() {
 			switch i % 8 {
 			case 0:
-				logger.Debug("debug", "k1")
+				logger.Debug(ctx, "debug k1")
 			case 1:
-				logger.Info("info")
+				logger.Info(ctx, "info")
 			case 2:
-				logger.Warn("warn", "k1", "v1", "k2")
+				logger.Warn(ctx, "warn k1=%s k2", "v1")
 			case 3:
-				logger.Error("error", "k1", "v1")
+				logger.Error(ctx, "error k1=%s", "v1")
 			case 4:
-				logger.Info("info ctx", "k1", "v1", "k2", "v2", "k3")
+				logger.Info(ctx, "info ctx k1=%s k2=%s k3", "v1", "v2")
 			case 5:
-				logger.Error("error odd", "k1", "v1", "k2")
+				logger.Error(ctx, "error odd k1=%s k2", "v1")
 			case 6:
-				logger.Warn("warn many", "k1", "v1", "k2", "v2", "k3", "v3", "k4", "v4")
+				logger.Warn(ctx, "warn many k1=%s k2=%s k3=%s k4=%s", "v1", "v2", "v3", "v4")
 			case 7:
-				logger.Debug("debug none")
+				logger.Debug(ctx, "debug none")
 			}
 			i++
 		}

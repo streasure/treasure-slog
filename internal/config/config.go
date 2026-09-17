@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"runtime"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -28,11 +29,12 @@ type LogConfig struct {
 
 // AsyncConfig 异步配置
 type AsyncConfig struct {
-	Enabled       bool `yaml:"enabled"`
-	BufferSize    int  `yaml:"buffer_size"`
-	BatchSize     int  `yaml:"batch_size"`
-	FlushInterval int  `yaml:"flush_interval"`
-	Workers       int  `yaml:"workers"`
+	Enabled          bool `yaml:"enabled"`
+	BufferSize       int  `yaml:"buffer_size"`
+	BatchSize        int  `yaml:"batch_size"`
+	FlushInterval    int  `yaml:"flush_interval"`
+	WorkerMultiplier int  `yaml:"worker_multiplier"` // worker 数 = CPU 核数 × 倍数，默认 1
+	Workers          int  `yaml:"-"`                  // 内部计算：CPU 核数 × 倍数
 }
 
 // ConsoleConfig 控制台输出配置
@@ -123,7 +125,7 @@ func LoadConfig(path string) (*Config, error) {
 func setDefaults(cfg *Config) {
 	// async.enabled 默认为 true：如果配置中没有 async 块或 enabled 字段为零值，
 	// 且其他 async 字段也为零值，视为未配置 async，默认启用异步
-	if !cfg.Log.Async.Enabled && cfg.Log.Async.Workers == 0 &&
+	if !cfg.Log.Async.Enabled && cfg.Log.Async.WorkerMultiplier == 0 &&
 		cfg.Log.Async.BufferSize == 0 && cfg.Log.Async.BatchSize == 0 &&
 		cfg.Log.Async.FlushInterval == 0 {
 		cfg.Log.Async.Enabled = true
@@ -137,9 +139,22 @@ func setDefaults(cfg *Config) {
 	if cfg.Log.Async.FlushInterval == 0 {
 		cfg.Log.Async.FlushInterval = 100
 	}
-	if cfg.Log.Async.Workers == 0 {
-		cfg.Log.Async.Workers = 4
+
+	// worker 数 = CPU 核数 × 倍数
+	multiplier := cfg.Log.Async.WorkerMultiplier
+	if multiplier <= 0 {
+		multiplier = 1
 	}
+	workers := runtime.NumCPU() * multiplier
+	// 限制范围：1~32
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > 32 {
+		workers = 32
+	}
+	cfg.Log.Async.Workers = workers
+
 	if cfg.Log.File.Rotate.MaxSize == 0 {
 		cfg.Log.File.Rotate.MaxSize = 100
 	}
