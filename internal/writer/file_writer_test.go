@@ -249,38 +249,6 @@ func TestCleanup_MaxAge(t *testing.T) {
 	}
 }
 
-func TestCompress(t *testing.T) {
-	dir := tempDir(t)
-	fw, err := NewFileWriter(FileWriterConfig{
-		Dir:      dir,
-		BaseName: "app",
-		MaxSize:  10,
-		Compress: true,
-	})
-	if err != nil {
-		t.Fatalf("NewFileWriter: %v", err)
-	}
-	defer fw.Close()
-
-	// 触发轮转
-	fw.Write(bytes.Repeat([]byte("x"), 15))
-	time.Sleep(10 * time.Millisecond)
-
-	// 等待压缩完成
-	time.Sleep(500 * time.Millisecond)
-
-	// 检查是否有 .gz 文件
-	gzFiles, _ := filepath.Glob(filepath.Join(dir, "app-*.log.gz"))
-	if len(gzFiles) == 0 {
-		// 压缩可能还在进行，再等一		time.Sleep(1 * time.Second)
-		gzFiles, _ = filepath.Glob(filepath.Join(dir, "app-*.log.gz"))
-	}
-
-	if len(gzFiles) == 0 {
-		t.Fatal("expected at least 1 .gz file after compression")
-	}
-}
-
 func TestConcurrentWrite(t *testing.T) {
 	dir := tempDir(t)
 	fw, err := NewFileWriter(FileWriterConfig{

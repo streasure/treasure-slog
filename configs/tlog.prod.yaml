@@ -19,7 +19,6 @@ log:
       max_size: 100              # 单文件最大 100MB，超过后切割新文件
       max_backups: 10            # 最多保留 10 个历史文件（超出删最旧的）
       max_age: 30                # 文件最长保留 30 天（超出删除）
-      compress: true             # 切割后 gzip 压缩，节省磁盘空间
       interval: 0                # 时间轮转间隔（秒），0=禁用；86400=每天切割
 
   stacktrace:                    # 堆栈追踪

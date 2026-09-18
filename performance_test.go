@@ -37,7 +37,6 @@ log:
       max_size: 1000
       max_backups: 10
       max_age: 30
-      compress: false
   stacktrace:
     enabled: false
   sampling:
@@ -126,7 +125,6 @@ log:
       max_size: 1000
       max_backups: 10
       max_age: 30
-      compress: false
   performance:
     lock_free: true
     use_pool: true
@@ -195,7 +193,6 @@ log:
       max_size: 1000
       max_backups: 10
       max_age: 30
-      compress: false
 `
 
 	// 写入临时配置文件
@@ -275,7 +272,6 @@ log:
       max_size: 1000
       max_backups: 10
       max_age: 30
-      compress: false
   performance:
     lock_free: true
     use_pool: true
@@ -359,7 +355,6 @@ log:
       max_size: 1000
       max_backups: 10
       max_age: 30
-      compress: false
   field_cache:
     enabled: true
     size: 100000

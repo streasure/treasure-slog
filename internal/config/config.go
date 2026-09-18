@@ -49,12 +49,11 @@ type FileConfig struct {
 	Rotate  RotateConfig `yaml:"rotate"`  // 文件轮转策略配置
 }
 
-// RotateConfig 文件轮转配置，控制日志文件的切割、保留和压缩策略
+// RotateConfig 文件轮转配置，控制日志文件的切割和保留策略
 type RotateConfig struct {
 	MaxSize    int  `yaml:"max_size"`    // 单文件最大体积（MB），超过后切割新文件，默认 100
 	MaxBackups int  `yaml:"max_backups"` // 最大保留历史文件数，超出后删除最旧的文件，默认 10
 	MaxAge     int  `yaml:"max_age"`     // 文件最长保留天数，超出后删除，默认 30
-	Compress   bool `yaml:"compress"`    // 是否对轮转后的旧文件进行 gzip 压缩，节省磁盘空间
 	Interval   int  `yaml:"interval"`    // 时间轮转间隔（秒），0=禁用时间轮转仅按大小切割，如 86400 表示每天切割
 }
 

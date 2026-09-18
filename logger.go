@@ -824,7 +824,6 @@ func New(configPath string) (*SLogger, error) {
 			MaxSize:     int64(cfg.Log.File.Rotate.MaxSize) * 1024 * 1024, // MB -> bytes
 			MaxBackups:  cfg.Log.File.Rotate.MaxBackups,
 			MaxAge:      time.Duration(cfg.Log.File.Rotate.MaxAge) * 24 * time.Hour, // 天-> duration
-			Compress:    cfg.Log.File.Rotate.Compress,
 			Interval:    time.Duration(cfg.Log.File.Rotate.Interval) * time.Second,
 		})
 		if err != nil {
