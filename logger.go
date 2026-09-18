@@ -1136,12 +1136,10 @@ func (l *SLogger) processEntryDirect(ctx context.Context, level slog.Level, msg 
 
 	safeArgsVal := safeArgs(args)
 
-	// Error 级别追加堆栈
-	if level == slog.LevelError {
-		if l.cfg != nil && l.cfg.Log.Stacktrace.Enabled && l.shouldAddStacktrace(level) {
-			stackTrace := getStackTrace(l.cfg.Log.Stacktrace.Depth)
-			safeArgsVal = append(safeArgsVal, "stacktrace", stackTrace)
-		}
+	// 根据 stacktrace.level 配置追加堆栈
+	if l.cfg != nil && l.cfg.Log.Stacktrace.Enabled && l.shouldAddStacktrace(level) {
+		stackTrace := getStackTrace(l.cfg.Log.Stacktrace.Depth)
+		safeArgsVal = append(safeArgsVal, "stacktrace", stackTrace)
 	}
 
 	endSlogCall := timing.startTimer(&timing.slogCallNS)
@@ -1224,12 +1222,10 @@ func (l *SLogger) processEntry(entry *logEntry) {
 		args = safeArgs(args)
 	}
 
-	// Error 级别追加堆栈
-	if entry.level == slog.LevelError {
-		if l.cfg != nil && l.cfg.Log.Stacktrace.Enabled && l.shouldAddStacktrace(entry.level) {
-			stackTrace := getStackTrace(l.cfg.Log.Stacktrace.Depth)
-			args = append(args, "stacktrace", stackTrace)
-		}
+	// 根据 stacktrace.level 配置追加堆栈
+	if l.cfg != nil && l.cfg.Log.Stacktrace.Enabled && l.shouldAddStacktrace(entry.level) {
+		stackTrace := getStackTrace(l.cfg.Log.Stacktrace.Depth)
+		args = append(args, "stacktrace", stackTrace)
 	}
 
 	endSlogCall := timing.startTimer(&timing.slogCallNS)
