@@ -1,32 +1,38 @@
 log:
-  level: info
-  format: json
-  async:
-    enabled: true
-    worker_multiplier: 1
-    buffer_size: 100000
-    batch_size: 1000
-    flush_interval: 100
-  console:
-    enabled: false
-  file:
-    enabled: true
-    path: ./logs/app.log
-    rotate:
-      max_size: 100
-      max_backups: 10
-      max_age: 30
-      compress: true
-      interval: 0
-  stacktrace:
-    enabled: true
-    level: error
-    depth: 10
-  sampling:
-    enabled: true
-    initial: 10000
-    thereafter: 1000
-  performance:
-    lock_free: true
-    use_pool: true
-    prealloc: true
+  level: info                    # 日志级别：debug < info < warn < error，生产用 info 过滤掉 debug 日志
+  format: json                   # 输出格式：json（结构化，便于 ELK/Loki 等日志系统解析）或 text（人类可读）
+
+  async:                         # 异步写入配置（核心性能参数）
+    enabled: true                # 启用异步模式：日志先入环形缓冲区，由后台 worker 批量写入，不阻塞业务协程
+    worker_multiplier: 1         # worker 数 = CPU核数 × 此倍数。1 = 核数个 worker，2 = 2倍核数（上限32）
+    buffer_size: 100000          # 环形缓冲区容量（每 worker 一份），生产环境调大避免丢日志
+    batch_size: 1000             # 每次批量写入的最大条数，攒够或超时才刷盘，减少 I/O 次数
+    flush_interval: 100          # 批量刷盘超时（毫秒），即使没攒够 batch_size 也在此时间后强制写入
+
+  console:                       # 控制台输出
+    enabled: false               # 生产关闭：避免 stdout 日志影响性能，且容器化部署通常由文件采集
+
+  file:                          # 文件输出
+    enabled: true                # 启用写日志文件
+    path: ./logs/app.log         # 日志文件路径
+    rotate:                      # 日志轮转（防磁盘爆满）
+      max_size: 100              # 单文件最大 100MB，超过后切割新文件
+      max_backups: 10            # 最多保留 10 个历史文件（超出删最旧的）
+      max_age: 30                # 文件最长保留 30 天（超出删除）
+      compress: true             # 切割后 gzip 压缩，节省磁盘空间
+      interval: 0                # 时间轮转间隔（秒），0=禁用；86400=每天切割
+
+  stacktrace:                    # 堆栈追踪
+    enabled: true                # 启用堆栈抓取
+    level: error                 # 仅 error 级别日志附加堆栈（方便定位线上报错）
+    depth: 10                    # 堆栈深度：向上取 10 层调用栈
+
+  sampling:                      # 日志采样（高吞吐场景降噪）
+    enabled: true                # 启用采样
+    initial: 10000               # 前 10000 条/秒 全量记录（保证冷启动不丢日志）
+    thereafter: 1000             # 超过后每秒只记录 1000 条（按比例丢弃重复日志，减少 I/O）
+
+  performance:                   # 底层性能优化开关
+    lock_free: true              # 启用后确保最少 4 个 worker，分散环形缓冲区锁竞争（非真正无锁）
+    use_pool: true               # 用 sync.Pool 复用 logEntry 对象，减少堆分配和 GC 压力
+    prealloc: true               # 环形缓冲区容量翻倍预分配，避免运行时动态扩容的拷贝开销

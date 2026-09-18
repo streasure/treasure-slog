@@ -825,7 +825,7 @@ func New(configPath string) (*SLogger, error) {
 			MaxBackups:  cfg.Log.File.Rotate.MaxBackups,
 			MaxAge:      time.Duration(cfg.Log.File.Rotate.MaxAge) * 24 * time.Hour, // 天-> duration
 			Compress:    cfg.Log.File.Rotate.Compress,
-			Interval:    cfg.Log.File.Rotate.Interval,
+			Interval:    time.Duration(cfg.Log.File.Rotate.Interval) * time.Second,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("create file writer error: %w", err)
