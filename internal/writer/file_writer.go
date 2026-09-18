@@ -262,27 +262,9 @@ func (fw *FileWriter) isFileActive(path string) bool {
 
 // removeFile 删除文件
 func (fw *FileWriter) removeFile(path string) {
-	if err := removeWithRetry(path, 3, 100*time.Millisecond); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		fmt.Fprintf(os.Stderr, "[tlog] remove old file %s: %v\n", path, err)
 	}
-}
-
-// removeWithRetry 带重试的文件删除，解决 Windows 上文件句柄未完全释放导致删除失败的问题
-func removeWithRetry(path string, retries int, interval time.Duration) error {
-	var err error
-	for i := 0; i <= retries; i++ {
-		err = os.Remove(path)
-		if err == nil {
-			return nil
-		}
-		if os.IsNotExist(err) {
-			return err
-		}
-		if i < retries {
-			time.Sleep(interval)
-		}
-	}
-	return err
 }
 
 // --- 后台协程 ---
