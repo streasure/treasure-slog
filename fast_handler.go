@@ -24,9 +24,15 @@ var fastBufPool = sync.Pool{
 type FastHandler struct {
 	w           io.Writer
 	levelRef    *atomic.Int32 // 指向 SLogger.level，动态感知级别变化
-	preAttrs    []slog.Attr
+	preAttrs    []preAttr     // WithAttrs/WithGroup 时预存的属性，每个属性独立记录添加时的 group 前缀
 	groups      []string
 	groupPrefix string // 缓存：避免每次 Handle() 重建
+}
+
+// preAttr 记录一个预存属性及其添加时的 group 前缀
+type preAttr struct {
+	attr   slog.Attr
+	prefix string // 添加时的 groupPrefix
 }
 
 // NewFastHandler 创建 FastHandler
@@ -35,7 +41,7 @@ func NewFastHandler(w io.Writer, levelRef *atomic.Int32) *FastHandler {
 	h := &FastHandler{
 		w:        w,
 		levelRef: levelRef,
-		preAttrs: make([]slog.Attr, 0, 8),
+		preAttrs: make([]preAttr, 0, 8),
 		groups:   make([]string, 0, 4),
 	}
 	return h
@@ -72,17 +78,17 @@ func (h *FastHandler) Handle(_ context.Context, r slog.Record) error {
 	buf = appendJSONString(buf, r.Message)
 	buf = append(buf, '"')
 
-	for _, a := range h.preAttrs {
-		if a.Key == "" {
+	for _, pa := range h.preAttrs {
+		if pa.attr.Key == "" {
 			continue
 		}
 		buf = append(buf, `,"`...)
-		if h.groupPrefix != "" {
-			buf = appendJSONString(buf, h.groupPrefix)
+		if pa.prefix != "" {
+			buf = appendJSONString(buf, pa.prefix)
 		}
-		buf = appendJSONString(buf, a.Key)
+		buf = appendJSONString(buf, pa.attr.Key)
 		buf = append(buf, `":`...)
-		buf = appendAttrValue(buf, a.Value)
+		buf = appendAttrValue(buf, pa.attr.Value)
 	}
 
 	r.Attrs(func(a slog.Attr) bool {
@@ -119,9 +125,11 @@ func (h *FastHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 		return h
 	}
 	newHandler := *h
-	newHandler.preAttrs = make([]slog.Attr, len(h.preAttrs)+len(attrs))
+	newHandler.preAttrs = make([]preAttr, len(h.preAttrs)+len(attrs))
 	copy(newHandler.preAttrs, h.preAttrs)
-	copy(newHandler.preAttrs[len(h.preAttrs):], attrs)
+	for i, a := range attrs {
+		newHandler.preAttrs[len(h.preAttrs)+i] = preAttr{attr: a, prefix: h.groupPrefix}
+	}
 	return &newHandler
 }
 

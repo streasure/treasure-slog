@@ -31,6 +31,7 @@ func lockContentionTest(t *testing.T, level slog.Level, workers, bufSize, batchS
 				},
 			},
 		},
+		syncOnce: &sync.Once{},
 	}
 	s.level.Store(int32(level))
 	handler := NewFastHandler(io.Discard, s.level)
@@ -616,6 +617,7 @@ func TestLockContention_VerifyEntriesProcessed(t *testing.T) {
 				},
 			},
 		},
+		syncOnce: &sync.Once{},
 	}
 	s.level.Store(int32(slog.LevelDebug))
 	handler := NewFastHandler(countingWriter, s.level)

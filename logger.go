@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -406,17 +407,19 @@ func (bw *batchWriter) Close() error {
 	if bw.closed {
 		return nil
 	}
+	var flushErr error
 	if bw.buffer.Buffered() > 0 {
-		bw.buffer.Flush()
+		flushErr = bw.buffer.Flush()
 	}
 	if bw.timer != nil {
 		bw.timer.Stop()
 	}
+	var closeErr error
 	if closer, ok := bw.writer.(io.Closer); ok {
-		closer.Close()
+		closeErr = closer.Close()
 	}
 	bw.closed = true
-	return nil
+	return errors.Join(flushErr, closeErr)
 }
 
 // --- networkWriter 网络写入器 ---
@@ -473,26 +476,40 @@ func (nw *networkWriter) connect() error {
 }
 
 func (nw *networkWriter) Write(p []byte) (n int, err error) {
+	var lastErr error
 	for i := 0; i <= nw.retry; i++ {
 		nw.mu.RLock()
 		conn := nw.conn
 		nw.mu.RUnlock()
 		if conn == nil {
-			if i < nw.retry {
-				nw.connect()
+			if err := nw.connect(); err != nil {
+				lastErr = fmt.Errorf("network writer: reconnect failed: %w", err)
+			} else {
+				nw.mu.RLock()
+				conn = nw.conn
+				nw.mu.RUnlock()
+			}
+			if conn == nil {
+				if i < nw.retry {
+					time.Sleep(time.Duration(i+1) * 100 * time.Millisecond)
+				}
 				continue
 			}
-			return 0, fmt.Errorf("network writer: connection is nil")
 		}
 		n, err = conn.Write(p)
 		if err == nil {
 			return n, nil
 		}
+		lastErr = err
 		if i < nw.retry {
+			time.Sleep(time.Duration(i+1) * 100 * time.Millisecond)
 			nw.connect()
 		}
 	}
-	return n, err
+	if lastErr != nil {
+		return 0, lastErr
+	}
+	return 0, fmt.Errorf("network writer: connection is nil")
 }
 
 func (nw *networkWriter) Close() error {
@@ -566,10 +583,10 @@ type SLogger struct {
 	workers       []*worker
 	wg            *sync.WaitGroup
 	usePool       bool
-	asyncEnabled  bool      // 是否启用异步模式
-	lockFree      bool      // 是否启用无锁优化
-	prealloc      bool      // 是否启用预分配
-	syncOnce      sync.Once // 保证 Sync 只执行一次关闭逻辑，消除并发双关闭竞争
+	asyncEnabled  bool       // 是否启用异步模式
+	lockFree      bool       // 是否启用无锁优化
+	prealloc      bool       // 是否启用预分配
+	syncOnce      *sync.Once // 指针：With/WithContext/AddHook 派生 logger 共享同一个 Once，保证 Sync 不会双重关闭
 }
 
 // --- worker ---
@@ -793,6 +810,7 @@ func New(configPath string) (*SLogger, error) {
 		prealloc:     cfg.Log.Performance.Prealloc,
 		level:        &atomic.Int32{},
 		levelVar:     &slog.LevelVar{},
+		syncOnce:     &sync.Once{},
 	}
 
 	slogger.SetLevel(cfg.Log.Level)
@@ -902,6 +920,14 @@ func New(configPath string) (*SLogger, error) {
 		}
 	}
 
+	// 安全网：SLogger 被 GC 回收时自动停止 worker，防止协程泄漏
+	// 正常使用应在退出前调用 Sync()，SetFinalizer 仅作为兜底
+	if asyncEnabled {
+		runtime.SetFinalizer(slogger, func(s *SLogger) {
+			_ = s.Sync()
+		})
+	}
+
 	once.Do(func() { globalLogger = slogger })
 	return slogger, nil
 }
@@ -922,7 +948,10 @@ func (l *SLogger) createHandler(writer io.Writer) slog.Handler {
 				return a
 			},
 		})
+	case "json", "":
+		handler = NewFastHandler(writer, l.level)
 	default:
+		fmt.Fprintf(os.Stderr, "[treasure-slog] unknown format %q, falling back to json\n", l.cfg.Log.Format)
 		handler = NewFastHandler(writer, l.level)
 	}
 
@@ -1078,8 +1107,9 @@ func (l *SLogger) log(ctx context.Context, level slog.Level, msg string, args ..
 	entry.level = level
 	entry.ctx = ctx
 	// 内联 safeArgs：偶数参数直接赋值（避免函数调用开销与堆分配）
+	// 必须拷贝：异步模式下 worker 消费时调用方可能已复用底层数组
 	if len(args)%2 == 0 {
-		entry.args = args
+		entry.args = append([]any(nil), args...)
 	} else {
 		entry.args = safeArgs(args)
 	}
@@ -1341,6 +1371,7 @@ func (l *SLogger) withContext(ctx context.Context) *SLogger {
 	newLogger.asyncEnabled = l.asyncEnabled
 	newLogger.lockFree = l.lockFree
 	newLogger.prealloc = l.prealloc
+	newLogger.syncOnce = l.syncOnce // 共享同一个 Once，保证 Sync 不会双重关闭
 
 	// 添加 context 字段
 	slogLogger := l.logger.With(safeArgs(args)...)
@@ -1376,6 +1407,7 @@ func (l *SLogger) With(args ...any) Logger {
 	newLogger.asyncEnabled = l.asyncEnabled
 	newLogger.lockFree = l.lockFree
 	newLogger.prealloc = l.prealloc
+	newLogger.syncOnce = l.syncOnce // 共享同一个 Once，保证 Sync 不会双重关闭
 
 	return newLogger
 }
@@ -1431,6 +1463,7 @@ func (l *SLogger) AddHook(hook Hook) Logger {
 		asyncEnabled:  l.asyncEnabled,
 		lockFree:      l.lockFree,
 		prealloc:      l.prealloc,
+		syncOnce:      l.syncOnce, // 共享同一个 Once，保证 Sync 不会双重关闭
 	}
 }
 
@@ -1486,7 +1519,7 @@ func (l *SLogger) Sync() error {
 	if l == nil {
 		return nil
 	}
-	var syncErr error
+	var errs []error
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Fprintf(os.Stderr, "[treasure-slog] Sync panic recovered: %v\n", r)
@@ -1505,21 +1538,21 @@ func (l *SLogger) Sync() error {
 		l.workers = nil
 		if l.batchWriter != nil {
 			if err := l.batchWriter.Close(); err != nil {
-				syncErr = err
+				errs = append(errs, err)
 			}
 		}
 		if l.fileLogger != nil {
 			if err := l.fileLogger.Close(); err != nil {
-				syncErr = err
+				errs = append(errs, err)
 			}
 		}
 		if l.networkWriter != nil {
 			if err := l.networkWriter.Close(); err != nil {
-				syncErr = err
+				errs = append(errs, err)
 			}
 		}
 	})
-	return syncErr
+	return errors.Join(errs...)
 }
 
 // --- getStackTrace ---
@@ -1601,6 +1634,7 @@ func Recover() {
 		if globalLogger != nil {
 			globalLogger.Error(context.Background(), "panic recovered: %v, stacktrace: %s", r, stackTrace)
 		}
+		panic(r) // 记录日志后重新抛出，避免静默吞掉 panic
 	}
 }
 
@@ -1638,11 +1672,15 @@ func (h *SamplingHandler) Handle(ctx context.Context, record slog.Record) error 
 }
 
 func (h *SamplingHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return &SamplingHandler{handler: h.handler.WithAttrs(attrs), options: h.options}
+	sh := &SamplingHandler{handler: h.handler.WithAttrs(attrs), options: h.options}
+	sh.count.Store(h.count.Load()) // 保留采样计数器
+	return sh
 }
 
 func (h *SamplingHandler) WithGroup(name string) slog.Handler {
-	return &SamplingHandler{handler: h.handler.WithGroup(name), options: h.options}
+	sh := &SamplingHandler{handler: h.handler.WithGroup(name), options: h.options}
+	sh.count.Store(h.count.Load()) // 保留采样计数器
+	return sh
 }
 
 func (h *SamplingHandler) Enabled(ctx context.Context, level slog.Level) bool {

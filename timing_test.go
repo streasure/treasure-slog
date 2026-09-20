@@ -21,6 +21,7 @@ func TestTimingStats(t *testing.T) {
 		usePool:      false,
 		level:        &atomic.Int32{},
 		levelVar:     &slog.LevelVar{},
+		syncOnce:     &sync.Once{},
 	}
 	s.level.Store(int32(slog.LevelInfo))
 	handler := NewFastHandler(cw, s.level)
@@ -71,6 +72,7 @@ func TestTimingDisabled(t *testing.T) {
 		usePool:      false,
 		level:        &atomic.Int32{},
 		levelVar:     &slog.LevelVar{},
+		syncOnce:     &sync.Once{},
 	}
 	s.level.Store(int32(slog.LevelInfo))
 	handler := NewFastHandler(cw, s.level)
@@ -100,6 +102,7 @@ func TestTimingAsyncPath(t *testing.T) {
 		usePool:      true,
 		level:        &atomic.Int32{},
 		levelVar:     &slog.LevelVar{},
+		syncOnce:     &sync.Once{},
 	}
 	s.level.Store(int32(slog.LevelInfo))
 	handler := NewFastHandler(cw, s.level)

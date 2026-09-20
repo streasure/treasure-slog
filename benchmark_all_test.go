@@ -23,6 +23,7 @@ func makeAsyncLogger(b *testing.B, level slog.Level, workers, bufSize int) *SLog
 		usePool:      true,
 		level:        &atomic.Int32{},
 		levelVar:     &slog.LevelVar{},
+		syncOnce:     &sync.Once{},
 	}
 	s.level.Store(int32(level))
 	handler := NewFastHandler(io.Discard, s.level)
@@ -52,6 +53,7 @@ func makeSyncLogger(b *testing.B, level slog.Level) *SLogger {
 		usePool:      false,
 		level:        &atomic.Int32{},
 		levelVar:     &slog.LevelVar{},
+		syncOnce:     &sync.Once{},
 	}
 	s.level.Store(int32(level))
 	handler := NewFastHandler(io.Discard, s.level)
@@ -78,6 +80,7 @@ func makeAsyncLoggerWithBatch(b *testing.B, level slog.Level, workers, bufSize, 
 				},
 			},
 		},
+		syncOnce: &sync.Once{},
 	}
 	s.level.Store(int32(level))
 	handler := NewFastHandler(io.Discard, s.level)

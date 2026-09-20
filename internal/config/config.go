@@ -30,7 +30,7 @@ type LogConfig struct {
 type AsyncConfig struct {
 	Enabled          bool `yaml:"enabled"`           // 是否启用异步写入，未配置时默认启用
 	BufferSize       int  `yaml:"buffer_size"`       // 异步缓冲区大小（条数），积压超过此值时新日志可能被丢弃，默认 10000
-	BatchSize        int  `yaml:"batch_size"`        // 每批刷盘的日志条数，攒够后批量写入磁盘，默认 100
+	BatchSize        int  `yaml:"batch_size"`        // 刷盘缓冲阈值（KB），缓冲区积攒超过此值后批量写入磁盘，默认 100
 	FlushInterval    int  `yaml:"flush_interval"`    // 批量刷盘超时（毫秒），即使没攒够 batch_size 也在此时间后强制写入，默认 100
 	WorkerMultiplier int  `yaml:"worker_multiplier"` // 异步 worker 数 = CPU 核数 × 此倍数，用于并发压缩等后台任务，默认 1
 	Workers          int  `yaml:"-"`                 // 内部计算字段：实际 worker 数，限制在 1~32 之间，不由用户直接配置
@@ -159,7 +159,7 @@ func setDefaults(cfg *Config) {
 	if cfg.Log.File.Rotate.MaxAge == 0 {
 		cfg.Log.File.Rotate.MaxAge = 30
 	}
-	if cfg.Log.Stacktrace.Depth == 0 {
+	if cfg.Log.Stacktrace.Enabled && cfg.Log.Stacktrace.Depth == 0 {
 		cfg.Log.Stacktrace.Depth = 10
 	}
 	if cfg.Log.Sampling.Initial == 0 {
@@ -168,9 +168,7 @@ func setDefaults(cfg *Config) {
 	if cfg.Log.Sampling.Thereafter == 0 {
 		cfg.Log.Sampling.Thereafter = 100
 	}
-	if cfg.Log.FieldCache.Size == 0 {
-		cfg.Log.FieldCache.Size = 1000
-	}
+	// FieldCache 已废弃，不再设置默认值
 	if cfg.Log.Network.Timeout == 0 {
 		cfg.Log.Network.Timeout = 5
 	}

@@ -56,6 +56,7 @@ func makeTestLogger(t *testing.T, level string) (*SLogger, *captureWriter) {
 		usePool:      false,
 		level:        &atomic.Int32{},
 		levelVar:     &slog.LevelVar{},
+		syncOnce:     &sync.Once{},
 	}
 	s.level.Store(int32(parseLevelString(level)))
 	handler := NewFastHandler(cw, s.level)
@@ -276,6 +277,7 @@ func TestRedirectFailure_TextHandlerLevel(t *testing.T) {
 		usePool:      false,
 		level:        &atomic.Int32{},
 		levelVar:     &slog.LevelVar{},
+		syncOnce:     &sync.Once{},
 	}
 	s.level.Store(int32(slog.LevelError))
 	s.levelVar.Set(slog.LevelError)
@@ -313,6 +315,7 @@ func TestRedirectFailure_AsyncMode(t *testing.T) {
 		usePool:      true,
 		level:        &atomic.Int32{},
 		levelVar:     &slog.LevelVar{},
+		syncOnce:     &sync.Once{},
 	}
 	s.level.Store(int32(slog.LevelError))
 
@@ -367,6 +370,7 @@ func TestRedirectFailure_SamplingHandler(t *testing.T) {
 		usePool:      false,
 		level:        &atomic.Int32{},
 		levelVar:     &slog.LevelVar{},
+		syncOnce:     &sync.Once{},
 	}
 	s.level.Store(int32(slog.LevelError))
 
@@ -423,6 +427,7 @@ func TestRedirectFailure_MultiOutput(t *testing.T) {
 		usePool:      false,
 		level:        &atomic.Int32{},
 		levelVar:     &slog.LevelVar{},
+		syncOnce:     &sync.Once{},
 	}
 	s.level.Store(int32(slog.LevelWarn))
 

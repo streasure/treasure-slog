@@ -22,6 +22,7 @@ func TestWith_AttrsAppearInOutput(t *testing.T) {
 		usePool:      false,
 		level:        &atomic.Int32{},
 		levelVar:     &slog.LevelVar{},
+		syncOnce:     &sync.Once{},
 	}
 	s.level.Store(int32(slog.LevelDebug))
 	handler := NewFastHandler(&buf, s.level)
@@ -206,6 +207,7 @@ func TestContext_LogWithTraceIDs(t *testing.T) {
 		asyncEnabled: false,
 		level:        &atomic.Int32{},
 		levelVar:     &slog.LevelVar{},
+		syncOnce:     &sync.Once{},
 	}
 	s.level.Store(int32(slog.LevelDebug))
 	handler := NewFastHandler(&buf, s.level)
