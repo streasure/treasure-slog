@@ -73,7 +73,7 @@ func TestSync_ConcurrentSafe(t *testing.T) {
 
 	// 并发调用 Sync（派生 logger 共享同一 workers）
 	derived := s.With("svc", "test")
-	var panicCount int64
+	var panicCount atomic.Int64
 	var syncWg sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		syncWg.Add(1)
@@ -81,7 +81,7 @@ func TestSync_ConcurrentSafe(t *testing.T) {
 			defer syncWg.Done()
 			defer func() {
 				if r := recover(); r != nil {
-					atomic.AddInt64(&panicCount, 1)
+					panicCount.Add(1)
 				}
 			}()
 			if useDerived {
@@ -96,8 +96,8 @@ func TestSync_ConcurrentSafe(t *testing.T) {
 	close(stop)
 	wg.Wait()
 
-	if panicCount > 0 {
-		t.Errorf("并发 Sync 产生 %d 次 panic", panicCount)
+	if panicCount.Load() > 0 {
+		t.Errorf("并发 Sync 产生 %d 次 panic", panicCount.Load())
 	}
 }
 
@@ -121,7 +121,7 @@ func TestSync_Idempotent(t *testing.T) {
 func TestWorkerStop_DoubleStopSafe(t *testing.T) {
 	s, _ := lockContentionTest(t, slog.LevelDebug, 4, 100000, 512)
 
-	var panicCount int64
+	var panicCount atomic.Int64
 	var wg sync.WaitGroup
 	// 并发调用所有 worker 的 stop
 	for _, w := range s.workers {
@@ -130,7 +130,7 @@ func TestWorkerStop_DoubleStopSafe(t *testing.T) {
 			defer wg.Done()
 			defer func() {
 				if r := recover(); r != nil {
-					atomic.AddInt64(&panicCount, 1)
+					panicCount.Add(1)
 				}
 			}()
 			wk.stop()
@@ -139,8 +139,8 @@ func TestWorkerStop_DoubleStopSafe(t *testing.T) {
 	}
 	wg.Wait()
 
-	if panicCount > 0 {
-		t.Errorf("worker.stop 重复调用产生 %d 次 panic", panicCount)
+	if panicCount.Load() > 0 {
+		t.Errorf("worker.stop 重复调用产生 %d 次 panic", panicCount.Load())
 	}
 	_ = s.Sync()
 }
