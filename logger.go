@@ -184,12 +184,13 @@ func (t *timingStats) startTimer(acc *atomic.Int64) (end func()) {
 // --- logEntry ---
 
 type logEntry struct {
-	msg   string
-	level slog.Level
-	ctx   context.Context
-	args  []any
-	hooks []Hook
-	ts    time.Time // 日志时间戳（避免 slog 内部再次调用 time.Now）
+	msg     string
+	level   slog.Level
+	ctx     context.Context
+	args    []any
+	hooks   []Hook
+	handler slog.Handler // 捕获创建时的 handler，异步 worker 使用派生 handler 而非 base handler
+	ts      time.Time    // 日志时间戳（避免 slog 内部再次调用 time.Now）
 }
 
 func (e *logEntry) Reset() {
@@ -198,6 +199,7 @@ func (e *logEntry) Reset() {
 	e.msg = ""
 	e.args = nil
 	e.hooks = nil
+	e.handler = nil
 	e.ts = time.Time{}
 }
 
@@ -321,6 +323,7 @@ func (rb *ringBuffer) PopBatch(shardIdx int, batch []*logEntry) int {
 	n := 0
 	for n < len(batch) && s.head < s.tail {
 		batch[n] = s.buf[s.head&s.mask]
+		s.buf[s.head&s.mask] = nil // 清空槽位，允许 GC 回收 logEntry 及其引用
 		s.head++
 		n++
 	}
@@ -453,6 +456,7 @@ func (nw *networkWriter) connect() error {
 	defer nw.mu.Unlock()
 	if nw.conn != nil {
 		nw.conn.Close()
+		nw.conn = nil
 	}
 	var conn net.Conn
 	var err error
@@ -516,7 +520,9 @@ func (nw *networkWriter) Close() error {
 	nw.mu.Lock()
 	defer nw.mu.Unlock()
 	if nw.conn != nil {
-		return nw.conn.Close()
+		err := nw.conn.Close()
+		nw.conn = nil
+		return err
 	}
 	return nil
 }
@@ -578,6 +584,7 @@ type SLogger struct {
 	levelVar      *slog.LevelVar // 指针：TextHandler 动态级别共享
 	ringBuf       *ringBuffer
 	batchWriter   *batchWriter
+	consoleWriter *batchWriter   // 控制台独立 batchWriter（当 console.format != log.format 时使用）
 	networkWriter io.WriteCloser
 	cfg           *config.Config
 	workers       []*worker
@@ -887,10 +894,11 @@ func New(configPath string) (*SLogger, error) {
 
 	// 控制台独立格式：当 console.format 与 log.format 不同时，创建独立控制台 handler
 	if consoleIndependent {
-		consoleWriter := newBatchWriter(os.Stdout, cfg.Log.Async.BatchSize,
+		cw := newBatchWriter(os.Stdout, cfg.Log.Async.BatchSize,
 			time.Duration(cfg.Log.Async.FlushInterval)*time.Millisecond)
-		consoleHandler := slogger.createConsoleHandler(consoleWriter, consoleFormat)
+		consoleHandler := slogger.createConsoleHandler(cw, consoleFormat)
 		handler = newMultiHandler(handler, consoleHandler)
+		slogger.consoleWriter = cw
 	}
 
 	slogger.logger = slog.New(handler)
@@ -1106,6 +1114,7 @@ func (l *SLogger) log(ctx context.Context, level slog.Level, msg string, args ..
 	entry.msg = msg
 	entry.level = level
 	entry.ctx = ctx
+	entry.handler = l.handler // 捕获派生 handler，异步 worker 使用
 	// 内联 safeArgs：偶数参数直接赋值（避免函数调用开销与堆分配）
 	// 必须拷贝：异步模式下 worker 消费时调用方可能已复用底层数组
 	if len(args)%2 == 0 {
@@ -1265,10 +1274,15 @@ func (l *SLogger) processEntry(entry *logEntry) {
 	if ts.IsZero() {
 		ts = time.Now()
 	}
+	// 优先使用 entry 中捕获的 handler（异步模式下为派生 handler），否则用 base handler
+	h := entry.handler
+	if h == nil {
+		h = l.handler
+	}
 	record := slog.NewRecord(ts, entry.level, entry.msg, 0)
 	record.Add(args...)
-	if l.handler != nil {
-		_ = l.handler.Handle(ctx, record)
+	if h != nil {
+		_ = h.Handle(ctx, record)
 	} else {
 		_ = l.logger.Handler().Handle(ctx, record)
 	}
@@ -1363,6 +1377,7 @@ func (l *SLogger) withContext(ctx context.Context) *SLogger {
 	newLogger.levelVar = l.levelVar
 	newLogger.ringBuf = l.ringBuf
 	newLogger.batchWriter = l.batchWriter
+	newLogger.consoleWriter = l.consoleWriter
 	newLogger.networkWriter = l.networkWriter
 	newLogger.cfg = l.cfg
 	newLogger.workers = l.workers
@@ -1399,6 +1414,7 @@ func (l *SLogger) With(args ...any) Logger {
 	newLogger.levelVar = l.levelVar
 	newLogger.ringBuf = l.ringBuf
 	newLogger.batchWriter = l.batchWriter
+	newLogger.consoleWriter = l.consoleWriter
 	newLogger.networkWriter = l.networkWriter
 	newLogger.cfg = l.cfg
 	newLogger.workers = l.workers
@@ -1421,19 +1437,34 @@ func extractContextInfo(ctx context.Context) []any {
 		return nil
 	}
 	args := make([]any, 0, 8)
-	if v := ctx.Value("request_id"); v != nil {
-		args = append(args, "request_id", v)
-	}
-	if v := ctx.Value("user_id"); v != nil {
-		args = append(args, "user_id", v)
-	}
-	if v := ctx.Value("span_id"); v != nil {
-		args = append(args, "span_id", v)
-	}
-	if v := ctx.Value("trace_id"); v != nil {
-		args = append(args, "trace_id", v)
+	for _, ck := range contextKeys {
+		if v := ctx.Value(ck.key); v != nil {
+			args = append(args, ck.name, v)
+		}
 	}
 	return args
+}
+
+// contextKey 用于 context value 的类型安全 key，避免裸字符串碰撞
+type contextKey struct{ name string }
+
+// 内置 context key 常量
+var (
+	ContextKeyRequestID = &contextKey{"request_id"}
+	ContextKeyUserID    = &contextKey{"user_id"}
+	ContextKeySpanID    = &contextKey{"span_id"}
+	ContextKeyTraceID   = &contextKey{"trace_id"}
+)
+
+// contextKeys 统一注册，extractContextInfo 遍历此列表
+var contextKeys = []struct {
+	key  *contextKey
+	name string
+}{
+	{ContextKeyRequestID, "request_id"},
+	{ContextKeyUserID, "user_id"},
+	{ContextKeySpanID, "span_id"},
+	{ContextKeyTraceID, "trace_id"},
 }
 
 func (l *SLogger) AddHook(hook Hook) Logger {
@@ -1455,6 +1486,7 @@ func (l *SLogger) AddHook(hook Hook) Logger {
 		levelVar:      l.levelVar,
 		ringBuf:       l.ringBuf,
 		batchWriter:   l.batchWriter,
+		consoleWriter: l.consoleWriter,
 		networkWriter: l.networkWriter,
 		cfg:           l.cfg,
 		workers:       l.workers,
@@ -1536,8 +1568,14 @@ func (l *SLogger) Sync() error {
 			l.wg.Wait()
 		}
 		l.workers = nil
+		l.asyncEnabled = false // 后续日志直接走同步路径，避免异步推入后降级的开销
 		if l.batchWriter != nil {
 			if err := l.batchWriter.Close(); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		if l.consoleWriter != nil {
+			if err := l.consoleWriter.Close(); err != nil {
 				errs = append(errs, err)
 			}
 		}

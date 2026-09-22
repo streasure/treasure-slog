@@ -211,7 +211,7 @@ func TestLockContention_DerivedLoggersShareRingBuf(t *testing.T) {
 	// 派生多个 logger
 	derived1 := s.With("svc", "api")
 	derived2 := s.With("svc", "web")
-	derived3 := s.WithContext(context.WithValue(ctx, "request_id", "req-123"))
+	derived3 := s.WithContext(context.WithValue(ctx, ContextKeyRequestID, "req-123"))
 
 	// 验证所有派生 logger 共享同一 ringBuf 和 level 指针
 	dl1 := derived1.(*SLogger)

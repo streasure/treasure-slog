@@ -230,9 +230,9 @@ func TestContextAutoInject(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	ctx = context.WithValue(ctx, "request_id", "test-request-id")
-	ctx = context.WithValue(ctx, "user_id", "test-user-id")
-	ctx = context.WithValue(ctx, "span_id", "test-span-id")
+	ctx = context.WithValue(ctx, ContextKeyRequestID, "test-request-id")
+	ctx = context.WithValue(ctx, ContextKeyUserID, "test-user-id")
+	ctx = context.WithValue(ctx, ContextKeySpanID, "test-span-id")
 
 	ctxLogger := logger.WithContext(ctx)
 	ctxLogger.Info(ctx, "Test message with context")

@@ -196,7 +196,7 @@ func TestRedirectFailure_DerivedLogger(t *testing.T) {
 func TestRedirectFailure_WithContext(t *testing.T) {
 	s, cw := makeTestLogger(t, "warn")
 
-	ctx := context.WithValue(context.Background(), "request_id", "req-123")
+	ctx := context.WithValue(context.Background(), ContextKeyRequestID, "req-123")
 	derived := s.WithContext(ctx)
 	cw.Reset()
 

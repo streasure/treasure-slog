@@ -43,9 +43,9 @@ func main() {
 	// 3. Context 自动注入
 	fmt.Println("3. Context 自动注入追踪信息")
 	ctx = context.Background()
-	ctx = context.WithValue(ctx, "request_id", "req-abc-123")
-	ctx = context.WithValue(ctx, "user_id", "user-456")
-	ctx = context.WithValue(ctx, "trace_id", "trace-xyz-789")
+	ctx = context.WithValue(ctx, logger.ContextKeyRequestID, "req-abc-123")
+	ctx = context.WithValue(ctx, logger.ContextKeyUserID, "user-456")
+	ctx = context.WithValue(ctx, logger.ContextKeyTraceID, "trace-xyz-789")
 
 	ctxLog := logger.WithContext(ctx)
 	ctxLog.Info(ctx, "处理请求 endpoint=%s method=%s", "/api/users", "GET")

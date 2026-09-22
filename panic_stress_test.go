@@ -594,7 +594,7 @@ func BenchmarkErrorPanicStressWithContext(b *testing.B) {
 	defer logger.Sync()
 
 	ctx := context.Background()
-	ctx = context.WithValue(ctx, "request_id", "test-req-id")
+	ctx = context.WithValue(ctx, ContextKeyRequestID, "test-req-id")
 
 	for i := 0; i < 1000; i++ {
 		logger.Error(ctx, "warmup i=%d", i)

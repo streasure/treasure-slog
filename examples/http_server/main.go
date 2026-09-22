@@ -49,7 +49,7 @@ func main() {
 func handleRoot(w http.ResponseWriter, r *http.Request) {
 	// 创建带上下文的日志记录器
 	ctx := r.Context()
-	ctx = context.WithValue(ctx, "request_id", generateRequestID())
+	ctx = context.WithValue(ctx, logger.ContextKeyRequestID, generateRequestID())
 	ctxLog := logger.WithContext(ctx)
 
 	// 记录请求
@@ -63,7 +63,7 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, "Hello, Treasure-Slog!\n")
-	fmt.Fprintf(w, "请求 ID: %s\n", ctx.Value("request_id"))
+	fmt.Fprintf(w, "请求 ID: %s\n", ctx.Value(logger.ContextKeyRequestID))
 
 	// 记录响应
 	ctxLog.Info(ctx, "HTTP 响应 status=%d method=%s path=%s",
@@ -74,7 +74,7 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
 func handleAPI(w http.ResponseWriter, r *http.Request) {
 	// 创建带上下文的日志记录器
 	ctx := r.Context()
-	ctx = context.WithValue(ctx, "request_id", generateRequestID())
+	ctx = context.WithValue(ctx, logger.ContextKeyRequestID, generateRequestID())
 	ctxLog := logger.WithContext(ctx)
 
 	// 记录请求
@@ -90,7 +90,7 @@ func handleAPI(w http.ResponseWriter, r *http.Request) {
 	// 返回 JSON 响应
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, `{"status":"success","message":"API 调用成功","request_id":"%s"}`, ctx.Value("request_id"))
+	fmt.Fprintf(w, `{"status":"success","message":"API 调用成功","request_id":"%s"}`, ctx.Value(logger.ContextKeyRequestID))
 
 	// 记录响应
 	ctxLog.Info(ctx, "API 响应 status=%d", http.StatusOK)
@@ -100,7 +100,7 @@ func handleAPI(w http.ResponseWriter, r *http.Request) {
 func handleError(w http.ResponseWriter, r *http.Request) {
 	// 创建带上下文的日志记录器
 	ctx := r.Context()
-	ctx = context.WithValue(ctx, "request_id", generateRequestID())
+	ctx = context.WithValue(ctx, logger.ContextKeyRequestID, generateRequestID())
 	ctxLog := logger.WithContext(ctx)
 
 	// 记录请求
@@ -116,7 +116,7 @@ func handleError(w http.ResponseWriter, r *http.Request) {
 	// 返回错误响应
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusInternalServerError)
-	fmt.Fprintf(w, `{"status":"error","message":"服务器内部错误","request_id":"%s"}`, ctx.Value("request_id"))
+	fmt.Fprintf(w, `{"status":"error","message":"服务器内部错误","request_id":"%s"}`, ctx.Value(logger.ContextKeyRequestID))
 }
 
 // generateRequestID 生成请求 ID

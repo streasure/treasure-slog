@@ -162,11 +162,13 @@ func setDefaults(cfg *Config) {
 	if cfg.Log.Stacktrace.Enabled && cfg.Log.Stacktrace.Depth == 0 {
 		cfg.Log.Stacktrace.Depth = 10
 	}
-	if cfg.Log.Sampling.Initial == 0 {
-		cfg.Log.Sampling.Initial = 1000
-	}
-	if cfg.Log.Sampling.Thereafter == 0 {
-		cfg.Log.Sampling.Thereafter = 100
+	if cfg.Log.Sampling.Enabled {
+		if cfg.Log.Sampling.Initial == 0 {
+			cfg.Log.Sampling.Initial = 1000
+		}
+		if cfg.Log.Sampling.Thereafter == 0 {
+			cfg.Log.Sampling.Thereafter = 100
+		}
 	}
 	// FieldCache 已废弃，不再设置默认值
 	if cfg.Log.Network.Timeout == 0 {

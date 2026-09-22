@@ -114,6 +114,9 @@ func (fw *FileWriter) Write(p []byte) (n int, err error) {
 	if fw.needRotateBySize() {
 		if rotateErr := fw.rotate(); rotateErr != nil {
 			fmt.Fprintf(os.Stderr, "[tlog] rotate failed: %v\n", rotateErr)
+			if fw.file == nil {
+				return 0, fmt.Errorf("rotate failed and file is nil: %w", rotateErr)
+			}
 		}
 	}
 

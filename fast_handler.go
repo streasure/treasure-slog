@@ -206,12 +206,14 @@ func appendAttrValue(buf []byte, v slog.Value) []byte {
 				if i > 0 {
 					buf = append(buf, ',')
 				}
-				buf = append(buf, `,"`...)
+				buf = append(buf, '"')
 				buf = appendJSONString(buf, ga.Key)
 				buf = append(buf, `":`...)
 				buf = appendAttrValue(buf, ga.Value)
 			}
 			buf = append(buf, '}')
+		} else {
+			buf = append(buf, "null"...)
 		}
 	case slog.KindLogValuer:
 		buf = append(buf, '"')

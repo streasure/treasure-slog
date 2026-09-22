@@ -214,8 +214,8 @@ func TestContext_LogWithTraceIDs(t *testing.T) {
 	s.logger = slog.New(handler)
 	s.handler = handler
 
-	ctx := context.WithValue(context.Background(), "request_id", "req-abc-123")
-	ctx = context.WithValue(ctx, "trace_id", "trace-xyz")
+	ctx := context.WithValue(context.Background(), ContextKeyRequestID, "req-abc-123")
+	ctx = context.WithValue(ctx, ContextKeyTraceID, "trace-xyz")
 	derived := s.WithContext(ctx)
 	derived.Info(context.Background(), "with-trace")
 

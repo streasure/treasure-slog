@@ -587,8 +587,8 @@ func BenchmarkWithContext(b *testing.B) {
 	defer s.Sync()
 
 	ctx := context.Background()
-	ctx = context.WithValue(ctx, "request_id", "test-123")
-	ctx = context.WithValue(ctx, "trace_id", "trace-456")
+	ctx = context.WithValue(ctx, ContextKeyRequestID, "test-123")
+	ctx = context.WithValue(ctx, ContextKeyTraceID, "trace-456")
 
 	// 空 context（没有 trace 信息）
 	emptyCtx := context.Background()

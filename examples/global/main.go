@@ -33,7 +33,7 @@ func main() {
 	userLogger.Info(ctx, "User info")
 
 	// 使用 WithContext 函数添加上下文
-	ctx = context.WithValue(ctx, "request_id", "req-123")
+	ctx = context.WithValue(ctx, logger.ContextKeyRequestID, "req-123")
 	ctxLogger := userLogger.WithContext(ctx)
 	ctxLogger.Info(ctx, "WithContext example")
 
