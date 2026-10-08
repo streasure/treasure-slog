@@ -55,7 +55,7 @@ func main() {
 	// 测试性能
 	fmt.Println("4. 性能测试")
 	start := time.Now()
-	for i := 0; i < 10000; i++ {
+	for i := range 10000 {
 		logger.Info(ctx, "性能测试 iteration=%d timestamp=%d", i, time.Now().UnixNano())
 	}
 	elapsed := time.Since(start)

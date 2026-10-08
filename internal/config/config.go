@@ -28,12 +28,27 @@ type LogConfig struct {
 
 // AsyncConfig 异步写入配置，将日志写入与业务逻辑解耦，提升吞吐量
 type AsyncConfig struct {
-	Enabled          bool `yaml:"enabled"`           // 是否启用异步写入，未配置时默认启用
+	Enabled          bool `yaml:"enabled"`           // 是否启用异步写入；YAML 中缺省该键时默认启用，显式 false 为同步模式
 	BufferSize       int  `yaml:"buffer_size"`       // 异步缓冲区大小（条数），积压超过此值时新日志可能被丢弃，默认 10000
-	BatchSize        int  `yaml:"batch_size"`        // 刷盘缓冲阈值（KB），缓冲区积攒超过此值后批量写入磁盘，默认 100
+	BatchSize        int  `yaml:"batch_size"`        // 批量阈值双重语义：worker 单批条数 + batchWriter 刷盘字节阈值（KB），默认 100
 	FlushInterval    int  `yaml:"flush_interval"`    // 批量刷盘超时（毫秒），即使没攒够 batch_size 也在此时间后强制写入，默认 100
-	WorkerMultiplier int  `yaml:"worker_multiplier"` // 异步 worker 数 = CPU 核数 × 此倍数，用于并发压缩等后台任务，默认 1
+	WorkerMultiplier int  `yaml:"worker_multiplier"` // 异步 worker 数 = CPU 核数 × 此倍数，默认 1
 	Workers          int  `yaml:"-"`                 // 内部计算字段：实际 worker 数，限制在 1~32 之间，不由用户直接配置
+	enabledSet       bool // enabled 键是否在 YAML 中显式出现（区分缺省与写 false），由 UnmarshalYAML 设置
+}
+
+// UnmarshalYAML 在解码前记录 enabled 键是否显式出现，供 setDefaults 区分“未写”与“写 false”
+func (a *AsyncConfig) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(value.Content); i += 2 {
+			if value.Content[i].Value == "enabled" {
+				a.enabledSet = true
+				break
+			}
+		}
+	}
+	type plain AsyncConfig // 新类型避免递归调用本方法
+	return value.Decode((*plain)(a))
 }
 
 // ConsoleConfig 控制台（标准输出/标准错误）日志输出配置
@@ -42,7 +57,7 @@ type ConsoleConfig struct {
 	Format  string `yaml:"format"`  // 控制台输出格式：text（人类可读）/ json（结构化），为空时跟随全局 format
 }
 
-// FileConfig 文件日志输出配置，支持按大小/时间轮转和异步压缩
+// FileConfig 文件日志输出配置，支持按大小/时间轮转
 type FileConfig struct {
 	Enabled bool         `yaml:"enabled"` // 是否启用文件输出
 	Path    string       `yaml:"path"`    // 日志文件路径，如 ./logs/app.log，目录不存在时自动创建
@@ -51,10 +66,10 @@ type FileConfig struct {
 
 // RotateConfig 文件轮转配置，控制日志文件的切割和保留策略
 type RotateConfig struct {
-	MaxSize    int  `yaml:"max_size"`    // 单文件最大体积（MB），超过后切割新文件，默认 100
-	MaxBackups int  `yaml:"max_backups"` // 最大保留历史文件数，超出后删除最旧的文件，默认 10
-	MaxAge     int  `yaml:"max_age"`     // 文件最长保留天数，超出后删除，默认 30
-	Interval   int  `yaml:"interval"`    // 时间轮转间隔（秒），0=禁用时间轮转仅按大小切割，如 86400 表示每天切割
+	MaxSize    int `yaml:"max_size"`    // 单文件最大体积（MB），超过后切割新文件，默认 100
+	MaxBackups int `yaml:"max_backups"` // 最大保留历史文件数，超出后删除最旧的文件，默认 10
+	MaxAge     int `yaml:"max_age"`     // 文件最长保留天数，超出后删除，默认 30
+	Interval   int `yaml:"interval"`    // 时间轮转间隔（秒），0=禁用时间轮转仅按大小切割，如 86400 表示每天切割
 }
 
 // NetworkConfig 网络日志输出配置，将日志通过 TCP/UDP 发送到远程日志收集服务
@@ -76,9 +91,9 @@ type StackConfig struct {
 
 // SamplingConfig 日志采样配置，在高并发场景下按比例丢弃重复日志，降低 IO 和 CPU 开销
 type SamplingConfig struct {
-	Enabled    bool `yaml:"enabled"`     // 是否启用采样
-	Initial    int  `yaml:"initial"`     // 前 N 条日志全部保留（不采样），默认 1000
-	Thereafter int  `yaml:"thereafter"`  // 之后每 N 条日志保留 1 条，默认 100
+	Enabled    bool `yaml:"enabled"`    // 是否启用采样
+	Initial    int  `yaml:"initial"`    // 前 N 条日志全部保留（不采样），默认 1000
+	Thereafter int  `yaml:"thereafter"` // 之后每 N 条日志保留 1 条，默认 100
 }
 
 // FieldCacheConfig 字段缓存配置（已废弃，保留用于向后兼容旧配置文件）
@@ -118,11 +133,9 @@ func LoadConfig(path string) (*Config, error) {
 
 // setDefaults 设置默认值
 func setDefaults(cfg *Config) {
-	// async.enabled 默认为 true：如果配置中没有 async 块或 enabled 字段为零值，
-	// 且其他 async 字段也为零值，视为未配置 async，默认启用异步
-	if !cfg.Log.Async.Enabled && cfg.Log.Async.WorkerMultiplier == 0 &&
-		cfg.Log.Async.BufferSize == 0 && cfg.Log.Async.BatchSize == 0 &&
-		cfg.Log.Async.FlushInterval == 0 {
+	// async.enabled：enabled 键缺省时默认启用异步；显式 enabled: false 保持同步模式。
+	// 旧逻辑按“其他字段全为零值”推断缺省，导致显式写 enabled: false 被翻转为 true（如 tlog.dev.yaml）
+	if !cfg.Log.Async.enabledSet {
 		cfg.Log.Async.Enabled = true
 	}
 	if cfg.Log.Async.BufferSize == 0 {
@@ -140,14 +153,8 @@ func setDefaults(cfg *Config) {
 	if multiplier <= 0 {
 		multiplier = 1
 	}
-	workers := runtime.NumCPU() * multiplier
 	// 限制范围：1~32
-	if workers < 1 {
-		workers = 1
-	}
-	if workers > 32 {
-		workers = 32
-	}
+	workers := min(max(runtime.NumCPU()*multiplier, 1), 32)
 	cfg.Log.Async.Workers = workers
 
 	if cfg.Log.File.Rotate.MaxSize == 0 {

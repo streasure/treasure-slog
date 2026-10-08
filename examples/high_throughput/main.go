@@ -37,7 +37,7 @@ func main() {
 	// 预热
 	fmt.Println("预热中...")
 	ctx := context.Background()
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		logger.Info(ctx, "Warmup i=%d", i)
 	}
 	time.Sleep(100 * time.Millisecond)
@@ -50,15 +50,13 @@ func main() {
 	var wg sync.WaitGroup
 	logsPerGoroutine := numLogs / concurrency
 
-	for i := 0; i < concurrency; i++ {
-		wg.Add(1)
-		go func(id int) {
-			defer wg.Done()
-			for j := 0; j < logsPerGoroutine; j++ {
+	for i := range concurrency {
+		wg.Go(func() {
+			for j := range logsPerGoroutine {
 				logger.Info(ctx, "High throughput test goroutine=%d iteration=%d timestamp=%d data=%s",
-					id, j, time.Now().UnixNano(), "test data for high throughput benchmarking")
+					i, j, time.Now().UnixNano(), "test data for high throughput benchmarking")
 			}
-		}(i)
+		})
 	}
 
 	// 等待所有 goroutine 完成

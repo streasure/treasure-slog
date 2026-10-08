@@ -19,7 +19,7 @@ func lockContentionTest(t *testing.T, level slog.Level, workers, bufSize, batchS
 	s := &SLogger{
 		hooks:        []Hook{},
 		wg:           &sync.WaitGroup{},
-		asyncEnabled: true,
+		asyncEnabled: newAtomicBool(true),
 		usePool:      true,
 		level:        &atomic.Int32{},
 		levelVar:     &slog.LevelVar{},
@@ -90,7 +90,7 @@ func TestLockContention_HighConcurrency_NoDeadlock(t *testing.T) {
 	wg.Add(goroutines)
 
 	mustCompleteWithin(t, 30*time.Second, "256并发写入", func() {
-		for i := 0; i < goroutines; i++ {
+		for i := range goroutines {
 			go func(id int) {
 				defer wg.Done()
 				defer func() {
@@ -98,7 +98,7 @@ func TestLockContention_HighConcurrency_NoDeadlock(t *testing.T) {
 						t.Errorf("goroutine %d panic: %v", id, r)
 					}
 				}()
-				for j := 0; j < perG; j++ {
+				for j := range perG {
 					s.Info(ctx, "high-concurrency g=%d j=%d", id, j)
 				}
 			}(i)
@@ -131,7 +131,7 @@ func TestLockContention_Scaling_MultiShard(t *testing.T) {
 
 		ctx := context.Background()
 		// 预热
-		for i := 0; i < 100; i++ {
+		for i := range 100 {
 			s.Info(ctx, "warmup i=%d", i)
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -139,14 +139,12 @@ func TestLockContention_Scaling_MultiShard(t *testing.T) {
 		var wg sync.WaitGroup
 		perG := totalLogs / goroutines
 		start := time.Now()
-		for i := 0; i < goroutines; i++ {
-			wg.Add(1)
-			go func(id int) {
-				defer wg.Done()
-				for j := 0; j < perG; j++ {
-					s.Info(ctx, "scale g=%d j=%d", id, j)
+		for i := range goroutines {
+			wg.Go(func() {
+				for j := range perG {
+					s.Info(ctx, "scale g=%d j=%d", i, j)
 				}
-			}(i)
+			})
 		}
 		wg.Wait()
 		_ = s.Sync()
@@ -179,10 +177,10 @@ func TestLockContention_NoDropUnderNormalLoad(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
 
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		go func(id int) {
 			defer wg.Done()
-			for j := 0; j < perG; j++ {
+			for j := range perG {
 				s.Info(ctx, "no-drop g=%d j=%d", id, j)
 			}
 		}(i)
@@ -232,28 +230,28 @@ func TestLockContention_DerivedLoggersShareRingBuf(t *testing.T) {
 	wg.Add(goroutines * 4)
 
 	mustCompleteWithin(t, 20*time.Second, "派生logger并发写入", func() {
-		for i := 0; i < goroutines; i++ {
+		for i := range goroutines {
 			go func(id int) {
 				defer wg.Done()
-				for j := 0; j < perG; j++ {
+				for j := range perG {
 					s.Info(ctx, "base g=%d j=%d", id, j)
 				}
 			}(i)
 			go func(id int) {
 				defer wg.Done()
-				for j := 0; j < perG; j++ {
+				for j := range perG {
 					derived1.Info(ctx, "derived1 g=%d j=%d", id, j)
 				}
 			}(i)
 			go func(id int) {
 				defer wg.Done()
-				for j := 0; j < perG; j++ {
+				for j := range perG {
 					derived2.Info(ctx, "derived2 g=%d j=%d", id, j)
 				}
 			}(i)
 			go func(id int) {
 				defer wg.Done()
-				for j := 0; j < perG; j++ {
+				for j := range perG {
 					derived3.Info(ctx, "derived3 g=%d j=%d", id, j)
 				}
 			}(i)
@@ -286,13 +284,13 @@ func TestLockContention_ConcurrentSetLevel_NoDataRace(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			levels := []string{"debug", "info", "warn", "error"}
-			for i := 0; i < 1000; i++ {
+			for i := range 1000 {
 				s.SetLevel(levels[i%len(levels)])
 			}
 		}()
 
 		// 其余 goroutine 持续写入
-		for i := 0; i < goroutines; i++ {
+		for i := range goroutines {
 			go func(id int) {
 				defer wg.Done()
 				defer func() {
@@ -300,7 +298,7 @@ func TestLockContention_ConcurrentSetLevel_NoDataRace(t *testing.T) {
 						t.Errorf("goroutine %d panic: %v", id, r)
 					}
 				}()
-				for j := 0; j < perG; j++ {
+				for j := range perG {
 					// 混合各级别写入
 					switch j % 4 {
 					case 0:
@@ -340,7 +338,7 @@ func TestLockContention_AllInterfacesMixed(t *testing.T) {
 	ctx := context.Background()
 
 	mustCompleteWithin(t, 30*time.Second, "全接口混合并发", func() {
-		for i := 0; i < goroutines; i++ {
+		for i := range goroutines {
 			go func(id int) {
 				defer wg.Done()
 				defer func() {
@@ -348,7 +346,7 @@ func TestLockContention_AllInterfacesMixed(t *testing.T) {
 						t.Errorf("goroutine %d panic: %v", id, r)
 					}
 				}()
-				for j := 0; j < perG; j++ {
+				for j := range perG {
 					switch j % 4 {
 					case 0:
 						s.Debug(ctx, "d g=%d j=%d", id, j)
@@ -386,7 +384,7 @@ func TestLockContention_ShutdownDuringWrite(t *testing.T) {
 
 	panicCount := atomic.Int64{}
 
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		go func(id int) {
 			defer wg.Done()
 			defer func() {
@@ -394,7 +392,7 @@ func TestLockContention_ShutdownDuringWrite(t *testing.T) {
 					panicCount.Add(1)
 				}
 			}()
-			for j := 0; j < perG; j++ {
+			for j := range perG {
 				// 并发写入；cleanup 中的 Sync 会在测试结束时关闭 workers
 				// 写入过程中可能 worker 已停止（io.Discard 写失败不会 panic）
 				s.Info(ctx, "shutdown-during-write g=%d j=%d", id, j)
@@ -429,7 +427,7 @@ func TestLockContention_ExtremeHighConcurrency_512(t *testing.T) {
 
 	start := time.Now()
 	mustCompleteWithin(t, 60*time.Second, "512并发写入", func() {
-		for i := 0; i < goroutines; i++ {
+		for i := range goroutines {
 			go func(id int) {
 				defer wg.Done()
 				defer func() {
@@ -437,7 +435,7 @@ func TestLockContention_ExtremeHighConcurrency_512(t *testing.T) {
 						t.Errorf("goroutine %d panic: %v", id, r)
 					}
 				}()
-				for j := 0; j < perG; j++ {
+				for j := range perG {
 					s.Info(ctx, "extreme-512 g=%d j=%d", id, j)
 				}
 			}(i)
@@ -453,9 +451,14 @@ func TestLockContention_ExtremeHighConcurrency_512(t *testing.T) {
 	t.Logf("512 goroutine: 总计 %d, 耗时 %s, 吞吐 %.0f ops/s, 丢弃 %d (%.4f%%)",
 		total, elapsed, throughput, dropped, float64(dropped)/float64(total)*100)
 
-	// 吞吐应至少达到 100 万 ops/s（验证锁竞争没有严重退化）
-	if throughput < 1000000 {
-		t.Errorf("512 并发吞吐 %.0f ops/s < 1M ops/s，锁竞争可能限制性能", throughput)
+	// 吞吐应至少达到 100 万 ops/s（验证锁竞争没有严重退化）；
+	// -race 下检测器拖慢 5~10 倍，放宽阈值（仍验证无饥饿/死锁）
+	minThroughput := float64(1000000)
+	if raceEnabled {
+		minThroughput = 100000
+	}
+	if throughput < minThroughput {
+		t.Errorf("512 并发吞吐 %.0f ops/s < %.0f ops/s，锁竞争可能限制性能", throughput, minThroughput)
 	}
 }
 
@@ -476,10 +479,10 @@ func TestLockContention_BatchSizeScaling(t *testing.T) {
 		var wg sync.WaitGroup
 		wg.Add(goroutines)
 		start := time.Now()
-		for i := 0; i < goroutines; i++ {
+		for i := range goroutines {
 			go func(id int) {
 				defer wg.Done()
-				for j := 0; j < perG; j++ {
+				for j := range perG {
 					s.Info(ctx, "batch g=%d j=%d", id, j)
 				}
 			}(i)
@@ -514,10 +517,10 @@ func TestLockContention_WorkerCountOptimal(t *testing.T) {
 		var wg sync.WaitGroup
 		wg.Add(goroutines)
 		start := time.Now()
-		for i := 0; i < goroutines; i++ {
+		for i := range goroutines {
 			go func(id int) {
 				defer wg.Done()
-				for j := 0; j < perG; j++ {
+				for j := range perG {
 					s.Info(ctx, "workers g=%d j=%d", id, j)
 				}
 			}(i)
@@ -562,7 +565,7 @@ func TestLockContention_LongRunningStability(t *testing.T) {
 
 	start := time.Now()
 	mustCompleteWithin(t, 10*time.Second, "持续3秒高并发", func() {
-		for i := 0; i < goroutines; i++ {
+		for i := range goroutines {
 			go func(id int) {
 				defer wg.Done()
 				defer func() {
@@ -605,7 +608,7 @@ func TestLockContention_VerifyEntriesProcessed(t *testing.T) {
 	s := &SLogger{
 		hooks:        []Hook{},
 		wg:           &sync.WaitGroup{},
-		asyncEnabled: true,
+		asyncEnabled: newAtomicBool(true),
 		usePool:      true,
 		level:        &atomic.Int32{},
 		levelVar:     &slog.LevelVar{},
@@ -640,10 +643,10 @@ func TestLockContention_VerifyEntriesProcessed(t *testing.T) {
 	const perG = 1000
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		go func(id int) {
 			defer wg.Done()
-			for j := 0; j < perG; j++ {
+			for j := range perG {
 				s.Info(ctx, "verify g=%d j=%d", id, j)
 			}
 		}(i)
@@ -685,10 +688,10 @@ func TestLockContention_DropRateUnderBufferPressure(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
 
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		go func(id int) {
 			defer wg.Done()
-			for j := 0; j < perG; j++ {
+			for j := range perG {
 				s.Info(ctx, "pressure g=%d j=%d", id, j)
 			}
 		}(i)
@@ -722,34 +725,29 @@ func TestLockContention_RaceDetector(t *testing.T) {
 	const goroutines = 16
 	const perG = 500
 	var wg sync.WaitGroup
-	wg.Add(goroutines)
-
-	wg.Add(1) // 为 SetLevel goroutine 预留
-	for i := 0; i < goroutines; i++ {
-		go func(id int) {
-			defer wg.Done()
-			for j := 0; j < perG; j++ {
+	for i := range goroutines {
+		wg.Go(func() {
+			for j := range perG {
 				switch j % 4 {
 				case 0:
-					s.Debug(ctx, "race g=%d j=%d", id, j)
+					s.Debug(ctx, "race g=%d j=%d", i, j)
 				case 1:
-					s.Info(ctx, "race g=%d j=%d", id, j)
+					s.Info(ctx, "race g=%d j=%d", i, j)
 				case 2:
-					s.Warn(ctx, "race g=%d j=%d", id, j)
+					s.Warn(ctx, "race g=%d j=%d", i, j)
 				case 3:
-					s.Error(ctx, "race g=%d j=%d", id, j)
+					s.Error(ctx, "race g=%d j=%d", i, j)
 				}
 			}
-		}(i)
+		})
 	}
 
 	// 并发 SetLevel
-	go func() {
-		defer wg.Done()
-		for i := 0; i < 100; i++ {
+	wg.Go(func() {
+		for i := range 100 {
 			s.SetLevel([]string{"debug", "info", "warn", "error"}[i%4])
 		}
-	}()
+	})
 
 	wg.Wait()
 	_ = s.Sync()

@@ -131,7 +131,8 @@ func TestPanicRobustness(t *testing.T) {
 					return nil
 				}
 				defer logger.Sync()
-				logger.Error(nil, "test error with nil context key=%s", "value")
+				var nilCtx context.Context // 故意为 nil：验证对 nil context 的容错
+				logger.Error(nilCtx, "test error with nil context key=%s", "value")
 				return nil
 			},
 		},
@@ -280,12 +281,10 @@ func TestPanicRobustness(t *testing.T) {
 				}
 				defer logger.Sync()
 				var wg sync.WaitGroup
-				for i := 0; i < 100; i++ {
-					wg.Add(1)
-					go func(id int) {
-						defer wg.Done()
-						logger.Error(context.Background(), "concurrent error %d goroutine=%d", id, id)
-					}(i)
+				for i := range 100 {
+					wg.Go(func() {
+						logger.Error(context.Background(), "concurrent error %d goroutine=%d", i, i)
+					})
 				}
 				wg.Wait()
 				return nil
@@ -305,21 +304,19 @@ func TestPanicRobustness(t *testing.T) {
 				}
 				defer logger.Sync()
 				var wg sync.WaitGroup
-				for i := 0; i < 200; i++ {
-					wg.Add(1)
-					go func(id int) {
-						defer wg.Done()
-						switch id % 4 {
+				for i := range 200 {
+					wg.Go(func() {
+						switch i % 4 {
 						case 0:
-							logger.Debug(context.Background(), "debug id=%d", id)
+							logger.Debug(context.Background(), "debug id=%d", i)
 						case 1:
-							logger.Info(context.Background(), "info id=%d", id)
+							logger.Info(context.Background(), "info id=%d", i)
 						case 2:
-							logger.Warn(context.Background(), "warn id=%d", id)
+							logger.Warn(context.Background(), "warn id=%d", i)
 						case 3:
-							logger.Error(context.Background(), "error id=%d", id)
+							logger.Error(context.Background(), "error id=%d", i)
 						}
-					}(i)
+					})
 				}
 				wg.Wait()
 				return nil
@@ -339,17 +336,14 @@ func TestPanicRobustness(t *testing.T) {
 				}
 				defer logger.Sync()
 				var wg sync.WaitGroup
-				for i := 0; i < 50; i++ {
-					wg.Add(2)
-					go func(id int) {
-						defer wg.Done()
-						logger.Error(context.Background(), "error id=%d", id)
-					}(i)
-					go func(id int) {
-						defer wg.Done()
+				for i := range 50 {
+					wg.Go(func() {
+						logger.Error(context.Background(), "error id=%d", i)
+					})
+					wg.Go(func() {
 						levels := []string{"debug", "info", "warn", "error"}
-						logger.SetLevel(levels[id%4])
-					}(i)
+						logger.SetLevel(levels[i%4])
+					})
 				}
 				wg.Wait()
 				return nil
@@ -464,7 +458,8 @@ func TestPanicRobustness(t *testing.T) {
 					return nil
 				}
 				defer logger.Sync()
-				l := logger.WithContext(nil)
+				var nilCtx context.Context // 故意为 nil：验证对 nil context 的容错
+				l := logger.WithContext(nilCtx)
 				l.Error(context.Background(), "test with nil context key=%s", "value")
 				return nil
 			},
@@ -549,7 +544,7 @@ func BenchmarkErrorPanicStress(b *testing.B) {
 	ctx := context.Background()
 
 	// 预热
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		logger.Error(ctx, "warmup i=%d", i)
 	}
 
@@ -596,7 +591,7 @@ func BenchmarkErrorPanicStressWithContext(b *testing.B) {
 	ctx := context.Background()
 	ctx = context.WithValue(ctx, ContextKeyRequestID, "test-req-id")
 
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		logger.Error(ctx, "warmup i=%d", i)
 	}
 

@@ -52,7 +52,7 @@ func makeTestLogger(t *testing.T, level string) (*SLogger, *captureWriter) {
 		cfg:          nil, // 不需要配置文件
 		hooks:        []Hook{},
 		wg:           &sync.WaitGroup{},
-		asyncEnabled: false, // 同步模式
+		asyncEnabled: newAtomicBool(false), // 同步模式
 		usePool:      false,
 		level:        &atomic.Int32{},
 		levelVar:     &slog.LevelVar{},
@@ -229,26 +229,22 @@ func TestRedirectFailure_ConcurrentSetLevelAndLog(t *testing.T) {
 	ctx := context.Background()
 	var wg sync.WaitGroup
 	// 一个 goroutine 持续切换级别（只在 debug/info 间切换，确保 Info 始终通过）
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		defer func() { recover() }()
 		levels := []string{"debug", "info"}
-		for i := 0; i < 1000; i++ {
+		for i := range 1000 {
 			s.SetLevel(levels[i%2])
 		}
-	}()
+	})
 
 	// 多个 goroutine 持续写日志
-	for i := 0; i < 4; i++ {
-		wg.Add(1)
-		go func(id int) {
-			defer wg.Done()
+	for i := range 4 {
+		wg.Go(func() {
 			defer func() { recover() }()
-			for j := 0; j < 500; j++ {
-				s.Info(ctx, "log-%d-%d worker=%d", id, j, id)
+			for j := range 500 {
+				s.Info(ctx, "log-%d-%d worker=%d", i, j, i)
 			}
-		}(i)
+		})
 	}
 
 	wg.Wait()
@@ -273,7 +269,7 @@ func TestRedirectFailure_TextHandlerLevel(t *testing.T) {
 	s := &SLogger{
 		hooks:        []Hook{},
 		wg:           &sync.WaitGroup{},
-		asyncEnabled: false,
+		asyncEnabled: newAtomicBool(false),
 		usePool:      false,
 		level:        &atomic.Int32{},
 		levelVar:     &slog.LevelVar{},
@@ -311,7 +307,7 @@ func TestRedirectFailure_AsyncMode(t *testing.T) {
 	s := &SLogger{
 		hooks:        []Hook{},
 		wg:           &sync.WaitGroup{},
-		asyncEnabled: true,
+		asyncEnabled: newAtomicBool(true),
 		usePool:      true,
 		level:        &atomic.Int32{},
 		levelVar:     &slog.LevelVar{},
@@ -366,7 +362,7 @@ func TestRedirectFailure_SamplingHandler(t *testing.T) {
 	s := &SLogger{
 		hooks:        []Hook{},
 		wg:           &sync.WaitGroup{},
-		asyncEnabled: false,
+		asyncEnabled: newAtomicBool(false),
 		usePool:      false,
 		level:        &atomic.Int32{},
 		levelVar:     &slog.LevelVar{},
@@ -423,7 +419,7 @@ func TestRedirectFailure_MultiOutput(t *testing.T) {
 	s := &SLogger{
 		hooks:        []Hook{},
 		wg:           &sync.WaitGroup{},
-		asyncEnabled: false,
+		asyncEnabled: newAtomicBool(false),
 		usePool:      false,
 		level:        &atomic.Int32{},
 		levelVar:     &slog.LevelVar{},

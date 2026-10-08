@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"sync"
 	"time"
 )
@@ -41,7 +41,7 @@ type FileWriter struct {
 
 	// --- 后台协程 ---
 	ticker *time.Ticker
-	done   chan struct{}   // 关闭信号
+	done   chan struct{}  // 关闭信号
 	bgWg   sync.WaitGroup // 等待后台协程退出
 	once   sync.Once
 }
@@ -75,9 +75,14 @@ func NewFileWriter(cfg FileWriterConfig) (*FileWriter, error) {
 		return nil, err
 	}
 
+	// 在启动后台协程之前创建 ticker：保证 Close 读取 fw.ticker 与后台协程之间
+	// 存在 happens-before 关系，消除无同步的读写竞争
+	if cfg.Interval > 0 {
+		fw.ticker = time.NewTicker(cfg.Interval)
+	}
+
 	// 启动后台协程：时间轮转
-	fw.bgWg.Add(1)
-	go fw.background()
+	fw.bgWg.Go(fw.background)
 
 	return fw, nil
 }
@@ -182,8 +187,11 @@ func (fw *FileWriter) rotate() error {
 
 	oldPath := filepath.Join(fw.cfg.Dir, fw.cfg.BaseName+fw.cfg.Ext)
 	ts := time.Now().Format("2006-01-02T15-04-05.000000")
-	rotatedName := fmt.Sprintf("%s-%s%s", fw.cfg.BaseName, ts, fw.cfg.Ext)
-	rotatedPath := filepath.Join(fw.cfg.Dir, rotatedName)
+	rotatedPath := filepath.Join(fw.cfg.Dir, fmt.Sprintf("%s-%s%s", fw.cfg.BaseName, ts, fw.cfg.Ext))
+	// 微秒级时间戳在高频轮转下可能碰撞，os.Rename 会静默覆盖同名文件导致已归档数据丢失
+	for i := 1; fileExists(rotatedPath); i++ {
+		rotatedPath = filepath.Join(fw.cfg.Dir, fmt.Sprintf("%s-%s-%d%s", fw.cfg.BaseName, ts, i, fw.cfg.Ext))
+	}
 
 	if err := os.Rename(oldPath, rotatedPath); err != nil {
 		openErr := fw.openFile()
@@ -231,15 +239,15 @@ func (fw *FileWriter) cleanup() {
 		}
 		files = append(files, fileInfo{path: path, modTime: info.ModTime()})
 	}
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].modTime.Before(files[j].modTime)
+	slices.SortFunc(files, func(a, b fileInfo) int {
+		return a.modTime.Compare(b.modTime)
 	})
 
 	now := time.Now()
 
 	if fw.cfg.MaxBackups > 0 && len(files) > fw.cfg.MaxBackups {
 		excess := len(files) - fw.cfg.MaxBackups
-		for i := 0; i < excess; i++ {
+		for i := range excess {
 			fw.removeFile(files[i].path)
 		}
 		files = files[excess:]
@@ -263,6 +271,12 @@ func (fw *FileWriter) isFileActive(path string) bool {
 	return path == activePath
 }
 
+// fileExists 判断文件是否存在
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 // removeFile 删除文件
 func (fw *FileWriter) removeFile(path string) {
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
@@ -274,12 +288,6 @@ func (fw *FileWriter) removeFile(path string) {
 
 // background 后台协程：处理时间轮转
 func (fw *FileWriter) background() {
-	defer fw.bgWg.Done()
-
-	if fw.cfg.Interval > 0 {
-		fw.ticker = time.NewTicker(fw.cfg.Interval)
-	}
-
 	for {
 		select {
 		case <-fw.done:
@@ -333,6 +341,6 @@ func (fw *FileWriter) ListBackups() []string {
 		}
 		result = append(result, path)
 	}
-	sort.Strings(result)
+	slices.Sort(result)
 	return result
 }

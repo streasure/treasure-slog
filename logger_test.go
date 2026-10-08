@@ -55,7 +55,7 @@ func TestLogger(t *testing.T) {
 			withLogger.Warn(ctx, "Warn message with context key=%s", "value")
 			withLogger.Error(ctx, "Error message with context key=%s", "value")
 
-			ctx = context.WithValue(ctx, "test-key", "test-value")
+			ctx = context.WithValue(ctx, ContextKeyRequestID, "test-value")
 			ctxLogger := logger.WithContext(ctx)
 			ctxLogger.Debug(ctx, "Debug message with context object key=%s", "value")
 			ctxLogger.Info(ctx, "Info message with context object key=%s", "value")

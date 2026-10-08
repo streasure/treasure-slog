@@ -18,7 +18,7 @@ func TestWith_AttrsAppearInOutput(t *testing.T) {
 	s := &SLogger{
 		hooks:        []Hook{},
 		wg:           &sync.WaitGroup{},
-		asyncEnabled: false,
+		asyncEnabled: newAtomicBool(false),
 		usePool:      false,
 		level:        &atomic.Int32{},
 		levelVar:     &slog.LevelVar{},
@@ -57,40 +57,36 @@ func TestSync_ConcurrentSafe(t *testing.T) {
 	// 持续写入
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
-	for i := 0; i < 16; i++ {
-		wg.Add(1)
-		go func(id int) {
-			defer wg.Done()
+	for i := range 16 {
+		wg.Go(func() {
 			for {
 				select {
 				case <-stop:
 					return
 				default:
-					s.Info(ctx, "concurrent-sync g=%d", id)
+					s.Info(ctx, "concurrent-sync g=%d", i)
 				}
 			}
-		}(i)
+		})
 	}
 
 	// 并发调用 Sync（派生 logger 共享同一 workers）
 	derived := s.With("svc", "test")
 	var panicCount atomic.Int64
 	var syncWg sync.WaitGroup
-	for i := 0; i < 8; i++ {
-		syncWg.Add(1)
-		go func(useDerived bool) {
-			defer syncWg.Done()
+	for i := range 8 {
+		syncWg.Go(func() {
 			defer func() {
 				if r := recover(); r != nil {
 					panicCount.Add(1)
 				}
 			}()
-			if useDerived {
+			if i%2 == 0 {
 				_ = derived.Sync()
 			} else {
 				_ = s.Sync()
 			}
-		}(i%2 == 0)
+		})
 	}
 	syncWg.Wait()
 
@@ -106,14 +102,14 @@ func TestSync_ConcurrentSafe(t *testing.T) {
 func TestSync_Idempotent(t *testing.T) {
 	s, _ := lockContentionTest(t, slog.LevelDebug, 4, 100000, 512)
 
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		if err := s.Sync(); err != nil {
 			t.Errorf("第 %d 次 Sync 返回错误: %v", i, err)
 		}
 	}
 	// 派生 logger 的 Sync 也应安全（共享 syncOnce）
 	derived := s.With("k", "v")
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		_ = derived.Sync()
 	}
 }
@@ -126,17 +122,15 @@ func TestWorkerStop_DoubleStopSafe(t *testing.T) {
 	var wg sync.WaitGroup
 	// 并发调用所有 worker 的 stop
 	for _, w := range s.workers {
-		wg.Add(1)
-		go func(wk *worker) {
-			defer wg.Done()
+		wg.Go(func() {
 			defer func() {
 				if r := recover(); r != nil {
 					panicCount.Add(1)
 				}
 			}()
-			wk.stop()
-			wk.stop() // 重复调用
-		}(w)
+			w.stop()
+			w.stop() // 重复调用
+		})
 	}
 	wg.Wait()
 
@@ -189,7 +183,7 @@ func TestWorkerRun_DeferOrder(t *testing.T) {
 
 	ctx := context.Background()
 	// 让 worker 正常工作一段时间
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		s.Info(ctx, "defer-order i=%d", i)
 	}
 	time.Sleep(10 * time.Millisecond)
@@ -204,7 +198,7 @@ func TestContext_LogWithTraceIDs(t *testing.T) {
 	s := &SLogger{
 		hooks:        []Hook{},
 		wg:           &sync.WaitGroup{},
-		asyncEnabled: false,
+		asyncEnabled: newAtomicBool(false),
 		level:        &atomic.Int32{},
 		levelVar:     &slog.LevelVar{},
 		syncOnce:     &sync.Once{},

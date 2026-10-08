@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -149,7 +150,7 @@ log:
 	ctx := context.Background()
 
 	// 预热
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		l.Info(ctx, "Warmup i=%d", i)
 	}
 	time.Sleep(100 * time.Millisecond)
@@ -226,7 +227,7 @@ log:
 	for _, level := range levels {
 		b.Run(level.name, func(b *testing.B) {
 			// 预热
-			for i := 0; i < 1000; i++ {
+			for i := range 1000 {
 				level.fn(ctx, "Warmup i=%d", i)
 			}
 			time.Sleep(100 * time.Millisecond)
@@ -296,7 +297,7 @@ log:
 	ctx := context.Background()
 
 	// 预热
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		l.Info(ctx, "Warmup i=%d", i)
 	}
 	time.Sleep(100 * time.Millisecond)
@@ -310,15 +311,13 @@ log:
 			logsPerGoroutine := b.N / concurrency
 
 			b.ResetTimer()
-			for i := 0; i < concurrency; i++ {
-				wg.Add(1)
-				go func(id int) {
-					defer wg.Done()
-					for j := 0; j < logsPerGoroutine; j++ {
+			for i := range concurrency {
+				wg.Go(func() {
+					for j := range logsPerGoroutine {
 						l.Info(ctx, "High concurrency log goroutine=%d iteration=%d timestamp=%d",
-							id, j, time.Now().UnixNano())
+							i, j, time.Now().UnixNano())
 					}
-				}(i)
+				})
 			}
 			wg.Wait()
 			b.StopTimer()
@@ -383,18 +382,19 @@ log:
 	for _, count := range fieldCounts {
 		b.Run(fmt.Sprintf("Fields_%d", count), func(b *testing.B) {
 			// 预热
-			for i := 0; i < 1000; i++ {
+			for range 1000 {
 				kvPairs := count / 2
 				if kvPairs == 0 {
 					l.Info(ctx, "Warmup")
 				} else {
-					format := "Warmup"
+					var format strings.Builder
+					format.WriteString("Warmup")
 					args := []any{}
-					for j := 0; j < kvPairs; j++ {
-						format += fmt.Sprintf(" key%d=%%s", j)
+					for j := range kvPairs {
+						format.WriteString(fmt.Sprintf(" key%d=%%s", j))
 						args = append(args, fmt.Sprintf("value%d", j))
 					}
-					l.Info(ctx, format, args...)
+					l.Info(ctx, format.String(), args...)
 				}
 			}
 			time.Sleep(100 * time.Millisecond)
@@ -407,13 +407,14 @@ log:
 					if kvPairs == 0 {
 						l.Info(ctx, "Log message with many fields")
 					} else {
-						format := "Log message with many fields"
+						var format strings.Builder
+						format.WriteString("Log message with many fields")
 						args := []any{}
-						for j := 0; j < kvPairs; j++ {
-							format += fmt.Sprintf(" key%d=%%s", j)
+						for j := range kvPairs {
+							format.WriteString(fmt.Sprintf(" key%d=%%s", j))
 							args = append(args, fmt.Sprintf("value%d", j))
 						}
-						l.Info(ctx, format, args...)
+						l.Info(ctx, format.String(), args...)
 					}
 				}
 			})

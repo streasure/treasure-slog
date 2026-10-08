@@ -17,7 +17,7 @@ func TestTimingStats(t *testing.T) {
 	cw := &captureWriter{}
 	s := &SLogger{
 		hooks:        []Hook{},
-		asyncEnabled: false,
+		asyncEnabled: newAtomicBool(false),
 		usePool:      false,
 		level:        &atomic.Int32{},
 		levelVar:     &slog.LevelVar{},
@@ -28,10 +28,10 @@ func TestTimingStats(t *testing.T) {
 	s.logger = slog.New(handler)
 
 	ctx := context.Background()
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		s.Info(ctx, "timing-test-msg index=%d", i)
 	}
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		s.Debug(ctx, "should-be-filtered index=%d", i)
 	}
 
@@ -68,7 +68,7 @@ func TestTimingDisabled(t *testing.T) {
 	cw := &captureWriter{}
 	s := &SLogger{
 		hooks:        []Hook{},
-		asyncEnabled: false,
+		asyncEnabled: newAtomicBool(false),
 		usePool:      false,
 		level:        &atomic.Int32{},
 		levelVar:     &slog.LevelVar{},
@@ -79,7 +79,7 @@ func TestTimingDisabled(t *testing.T) {
 	s.logger = slog.New(handler)
 
 	ctx := context.Background()
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		s.Info(ctx, "disabled-test i=%d", i)
 	}
 	if timing.logTotalNS.Load() != 0 {
@@ -98,7 +98,7 @@ func TestTimingAsyncPath(t *testing.T) {
 	s := &SLogger{
 		hooks:        []Hook{},
 		wg:           &sync.WaitGroup{},
-		asyncEnabled: true,
+		asyncEnabled: newAtomicBool(true),
 		usePool:      true,
 		level:        &atomic.Int32{},
 		levelVar:     &slog.LevelVar{},
@@ -121,7 +121,7 @@ func TestTimingAsyncPath(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		s.Info(ctx, "async-timing-test index=%d", i)
 	}
 	s.Sync()

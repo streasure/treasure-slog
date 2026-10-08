@@ -230,10 +230,7 @@ func newRingBuffer(capacity int) *ringBuffer {
 }
 
 func newShardedRingBuffer(capacity, shards int) *ringBuffer {
-	c := uint64(capacity)
-	if c < 1024 {
-		c = 1024
-	}
+	c := max(uint64(capacity), 1024)
 	if c&(c-1) != 0 { // 向上取整到 2 的幂
 		c--
 		c |= c >> 1
@@ -246,10 +243,7 @@ func newShardedRingBuffer(capacity, shards int) *ringBuffer {
 	if shards <= 0 {
 		shards = 1
 	}
-	perShard := c / uint64(shards)
-	if perShard < 256 {
-		perShard = 256
-	}
+	perShard := max(c/uint64(shards), 256)
 	if perShard&(perShard-1) != 0 {
 		perShard--
 		perShard |= perShard >> 1
@@ -291,26 +285,6 @@ func (s *rbShard) push(entry *logEntry) bool {
 	s.tail++
 	s.mu.Unlock()
 	return true
-}
-
-// Pop 从指定 shard 弹出（worker i 消费 shard i）
-func (rb *ringBuffer) Pop(shardIdx int) *logEntry {
-	if shardIdx < 0 || shardIdx >= rb.ns {
-		return nil
-	}
-	return rb.shards[shardIdx].pop()
-}
-
-func (s *rbShard) pop() *logEntry {
-	s.mu.Lock()
-	if s.head >= s.tail {
-		s.mu.Unlock()
-		return nil
-	}
-	entry := s.buf[s.head&s.mask]
-	s.head++
-	s.mu.Unlock()
-	return entry
 }
 
 // PopBatch 批量弹出（减少锁次数）：单消费者，连续推进 head
@@ -358,10 +332,7 @@ func newBatchWriter(writer io.Writer, batchSize int, interval time.Duration) *ba
 	if interval <= 0 {
 		interval = time.Second
 	}
-	bufSize := batchSize * 1024
-	if bufSize < 65536 {
-		bufSize = 65536
-	}
+	bufSize := max(batchSize*1024, 65536)
 	bw := &batchWriter{
 		writer:    writer,
 		buffer:    bufio.NewWriterSize(writer, bufSize),
@@ -417,12 +388,9 @@ func (bw *batchWriter) Close() error {
 	if bw.timer != nil {
 		bw.timer.Stop()
 	}
-	var closeErr error
-	if closer, ok := bw.writer.(io.Closer); ok {
-		closeErr = closer.Close()
-	}
+	// 不关闭底层 writer：其可能共享 os.Stdout 等全局资源，生命周期由拥有者管理
 	bw.closed = true
-	return errors.Join(flushErr, closeErr)
+	return flushErr
 }
 
 // --- networkWriter 网络写入器 ---
@@ -460,15 +428,17 @@ func (nw *networkWriter) connect() error {
 	}
 	var conn net.Conn
 	var err error
+	// 统一走 net.Dialer：超时由 dialer 控制（原 tls.Dial 没有超时，可能无限阻塞）
+	d := &net.Dialer{Timeout: nw.timeout}
 	switch nw.connType {
 	case "tcp":
 		if nw.useTLS {
-			conn, err = tls.Dial("tcp", nw.address, &tls.Config{})
+			conn, err = tls.DialWithDialer(d, "tcp", nw.address, &tls.Config{})
 		} else {
-			conn, err = net.DialTimeout("tcp", nw.address, nw.timeout)
+			conn, err = d.DialContext(context.Background(), "tcp", nw.address)
 		}
 	case "udp":
-		conn, err = net.DialTimeout("udp", nw.address, nw.timeout)
+		conn, err = d.DialContext(context.Background(), "udp", nw.address)
 	default:
 		return fmt.Errorf("unsupported network type: %s", nw.connType)
 	}
@@ -479,7 +449,28 @@ func (nw *networkWriter) connect() error {
 	return nil
 }
 
+// splitLineFrames 按行拆分字节流（保留 '\n' 结尾）
+// UDP 单个数据报上限 65507 字节，聚合缓冲可能远超该值，逐条发送才能保证可送达
+func splitLineFrames(p []byte) [][]byte {
+	var frames [][]byte
+	start := 0
+	for i := 0; i < len(p); i++ {
+		if p[i] == '\n' {
+			frames = append(frames, p[start:i+1])
+			start = i + 1
+		}
+	}
+	if start < len(p) {
+		frames = append(frames, p[start:])
+	}
+	return frames
+}
+
 func (nw *networkWriter) Write(p []byte) (n int, err error) {
+	frames := [][]byte{p}
+	if nw.connType == "udp" {
+		frames = splitLineFrames(p)
+	}
 	var lastErr error
 	for i := 0; i <= nw.retry; i++ {
 		nw.mu.RLock()
@@ -500,11 +491,20 @@ func (nw *networkWriter) Write(p []byte) (n int, err error) {
 				continue
 			}
 		}
-		n, err = conn.Write(p)
-		if err == nil {
-			return n, nil
+		written := 0
+		ok := true
+		for _, frame := range frames {
+			fn, werr := conn.Write(frame)
+			written += fn
+			if werr != nil {
+				lastErr = werr
+				ok = false
+				break
+			}
 		}
-		lastErr = err
+		if ok {
+			return written, nil
+		}
 		if i < nw.retry {
 			time.Sleep(time.Duration(i+1) * 100 * time.Millisecond)
 			nw.connect()
@@ -584,16 +584,23 @@ type SLogger struct {
 	levelVar      *slog.LevelVar // 指针：TextHandler 动态级别共享
 	ringBuf       *ringBuffer
 	batchWriter   *batchWriter
-	consoleWriter *batchWriter   // 控制台独立 batchWriter（当 console.format != log.format 时使用）
+	consoleWriter *batchWriter // 控制台独立 batchWriter（当 console.format != log.format 时使用）
 	networkWriter io.WriteCloser
 	cfg           *config.Config
 	workers       []*worker
 	wg            *sync.WaitGroup
 	usePool       bool
-	asyncEnabled  bool       // 是否启用异步模式
-	lockFree      bool       // 是否启用无锁优化
-	prealloc      bool       // 是否启用预分配
-	syncOnce      *sync.Once // 指针：With/WithContext/AddHook 派生 logger 共享同一个 Once，保证 Sync 不会双重关闭
+	asyncEnabled  *atomic.Bool // 是否启用异步模式；共享指针，Sync 后派生 logger 一并转同步
+	lockFree      bool         // 是否启用无锁优化
+	prealloc      bool         // 是否启用预分配
+	syncOnce      *sync.Once   // 指针：With/WithContext/AddHook 派生 logger 共享同一个 Once，保证 Sync 不会双重关闭
+}
+
+// newAtomicBool 构造 *atomic.Bool
+func newAtomicBool(v bool) *atomic.Bool {
+	b := new(atomic.Bool)
+	b.Store(v)
+	return b
 }
 
 // --- worker ---
@@ -607,18 +614,15 @@ type worker struct {
 }
 
 func (w *worker) start() {
-	w.wg.Add(1)
-	go w.run()
+	// Go 1.25+ 的 WaitGroup.Go：启动协程并在 run 返回时自动从 WaitGroup 移除
+	w.wg.Go(w.run)
 }
 
 func (w *worker) run() {
 	defer func() {
-		// 先 recover 原始 panic，再 Done；若 Done 自身异常也能被外层 defer 兜底
+		// wg.Go 负责 Done，这里只需 recover 防止 worker 协程崩溃
 		if r := recover(); r != nil {
 			fmt.Fprintf(os.Stderr, "[treasure-slog] worker %d panic recovered: %v\n", w.id, r)
-		}
-		if w.wg != nil {
-			w.wg.Done()
 		}
 	}()
 
@@ -719,7 +723,9 @@ func (w *worker) processBatch(batch []*logEntry) {
 	}()
 	endBatch := timing.startTimer(&timing.batchProcessNS)
 	defer endBatch()
-	timing.batchProcessed.Add(1)
+	if timing.enabled.Load() {
+		timing.batchProcessed.Add(1)
+	}
 	if w.logger == nil {
 		return
 	}
@@ -751,13 +757,13 @@ var (
 // resolveLogPath 解析 log.file.path 为绝对路径
 // 规则：
 //
-//	1. 绝对路径：原样使用
-//	2. 相对路径：基于进程工作目录（即调用工程所在目录）解析
-//	3. 以下情况直接报错，而不是把日志写进错误位置：
-//	   - 路径为空
-//	   - 工作目录获取失败（os.Getwd 出错）
-//	   - 工作目录位于系统临时目录（通常是编辑器以临时目录启动进程导致，
-//	     此时无法定位调用工程，日志会落到 tmp 下，属于运行环境配置错误）
+//  1. 绝对路径：原样使用
+//  2. 相对路径：基于进程工作目录（即调用工程所在目录）解析
+//  3. 以下情况直接报错，而不是把日志写进错误位置：
+//     - 路径为空
+//     - 工作目录获取失败（os.Getwd 出错）
+//     - 工作目录位于系统临时目录（通常是编辑器以临时目录启动进程导致，
+//     此时无法定位调用工程，日志会落到 tmp 下，属于运行环境配置错误）
 func resolveLogPath(path string) (string, error) {
 	if path == "" {
 		return "", fmt.Errorf("log.file.path is empty")
@@ -812,7 +818,7 @@ func New(configPath string) (*SLogger, error) {
 		hooks:        []Hook{},
 		wg:           &sync.WaitGroup{},
 		usePool:      cfg.Log.Performance.UsePool,
-		asyncEnabled: asyncEnabled,
+		asyncEnabled: newAtomicBool(asyncEnabled),
 		lockFree:     cfg.Log.Performance.LockFree,
 		prealloc:     cfg.Log.Performance.Prealloc,
 		level:        &atomic.Int32{},
@@ -843,13 +849,13 @@ func New(configPath string) (*SLogger, error) {
 			return nil, err
 		}
 		fw, err := writer.NewFileWriter(writer.FileWriterConfig{
-			Dir:         filepath.Dir(logPath),
-			BaseName:    filepath.Base(logPath[:len(logPath)-len(filepath.Ext(logPath))]),
-			Ext:         filepath.Ext(logPath),
-			MaxSize:     int64(cfg.Log.File.Rotate.MaxSize) * 1024 * 1024, // MB -> bytes
-			MaxBackups:  cfg.Log.File.Rotate.MaxBackups,
-			MaxAge:      time.Duration(cfg.Log.File.Rotate.MaxAge) * 24 * time.Hour, // 天-> duration
-			Interval:    time.Duration(cfg.Log.File.Rotate.Interval) * time.Second,
+			Dir:        filepath.Dir(logPath),
+			BaseName:   filepath.Base(logPath[:len(logPath)-len(filepath.Ext(logPath))]),
+			Ext:        filepath.Ext(logPath),
+			MaxSize:    int64(cfg.Log.File.Rotate.MaxSize) * 1024 * 1024, // MB -> bytes
+			MaxBackups: cfg.Log.File.Rotate.MaxBackups,
+			MaxAge:     time.Duration(cfg.Log.File.Rotate.MaxAge) * 24 * time.Hour, // 天-> duration
+			Interval:   time.Duration(cfg.Log.File.Rotate.Interval) * time.Second,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("create file writer error: %w", err)
@@ -889,7 +895,6 @@ func New(configPath string) (*SLogger, error) {
 		writer = slogger.batchWriter
 	}
 
-	// 创建主 handler
 	handler := slogger.createHandler(writer)
 
 	// 控制台独立格式：当 console.format 与 log.format 不同时，创建独立控制台 handler
@@ -897,9 +902,20 @@ func New(configPath string) (*SLogger, error) {
 		cw := newBatchWriter(os.Stdout, cfg.Log.Async.BatchSize,
 			time.Duration(cfg.Log.Async.FlushInterval)*time.Millisecond)
 		consoleHandler := slogger.createConsoleHandler(cw, consoleFormat)
-		handler = newMultiHandler(handler, consoleHandler)
+		handler = slog.NewMultiHandler(handler, consoleHandler)
 		slogger.consoleWriter = cw
 	}
+
+	// 采样在扇出之后统一包裹：文件与控制台共享同一采样计数，同一日志的去留决策一致
+	if cfg.Log.Sampling.Enabled {
+		handler = NewSamplingHandler(handler, SamplingOptions{
+			Initial:    cfg.Log.Sampling.Initial,
+			Thereafter: cfg.Log.Sampling.Thereafter,
+		})
+	}
+
+	// 写错误统一打到 stderr，避免静默丢弃（含 Sync 之后对已关闭 writer 的写入）
+	handler = newStderrLoggingHandler(handler)
 
 	slogger.logger = slog.New(handler)
 	slogger.handler = handler // 缓存 handler，processEntry 可直接调用
@@ -962,13 +978,6 @@ func (l *SLogger) createHandler(writer io.Writer) slog.Handler {
 		fmt.Fprintf(os.Stderr, "[treasure-slog] unknown format %q, falling back to json\n", l.cfg.Log.Format)
 		handler = NewFastHandler(writer, l.level)
 	}
-
-	if l.cfg.Log.Sampling.Enabled {
-		handler = NewSamplingHandler(handler, SamplingOptions{
-			Initial:    l.cfg.Log.Sampling.Initial,
-			Thereafter: l.cfg.Log.Sampling.Thereafter,
-		})
-	}
 	return handler
 }
 
@@ -995,51 +1004,35 @@ func (l *SLogger) createConsoleHandler(writer io.Writer, format string) slog.Han
 	}
 }
 
-// --- multiHandler 多handler分发 ---
+// --- stderrLoggingHandler ---
 
-type multiHandler struct {
-	handlers []slog.Handler
+// stderrLoggingHandler 包装下层 handler，把 Handle 返回的写错误输出到 stderr。
+// 与 slog.NewMultiHandler（Go 1.26 标准库）组合：stdlib 版本会把多个 handler 的
+// 错误用 errors.Join 聚合后返回，而本库热路径忽略返回值，这里保持原先“写错误打到
+// stderr、不向上冒泡”的行为，避免错误被静默丢弃。
+type stderrLoggingHandler struct {
+	slog.Handler
 }
 
-func newMultiHandler(handlers ...slog.Handler) slog.Handler {
-	return &multiHandler{handlers: handlers}
+func newStderrLoggingHandler(h slog.Handler) slog.Handler {
+	return &stderrLoggingHandler{Handler: h}
 }
 
-func (h *multiHandler) Enabled(ctx context.Context, level slog.Level) bool {
-	for _, handler := range h.handlers {
-		if handler.Enabled(ctx, level) {
-			return true
-		}
-	}
-	return false
-}
-
-func (h *multiHandler) Handle(ctx context.Context, r slog.Record) error {
-	for _, handler := range h.handlers {
-		if !handler.Enabled(ctx, r.Level) {
-			continue
-		}
-		if err := handler.Handle(ctx, r.Clone()); err != nil {
-			fmt.Fprintf(os.Stderr, "[treasure-slog] multiHandler Handle error: %v\n", err)
-		}
+func (h *stderrLoggingHandler) Handle(ctx context.Context, r slog.Record) error {
+	if err := h.Handler.Handle(ctx, r); err != nil {
+		fmt.Fprintf(os.Stderr, "[treasure-slog] handler error: %v\n", err)
 	}
 	return nil
 }
 
-func (h *multiHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	newHandlers := make([]slog.Handler, len(h.handlers))
-	for i, handler := range h.handlers {
-		newHandlers[i] = handler.WithAttrs(attrs)
-	}
-	return &multiHandler{handlers: newHandlers}
+// WithAttrs/WithGroup 显式覆盖嵌入提升的方法，保证派生 handler（如 logger.With）
+// 仍然带 stderr 错误输出包装
+func (h *stderrLoggingHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return &stderrLoggingHandler{Handler: h.Handler.WithAttrs(attrs)}
 }
 
-func (h *multiHandler) WithGroup(name string) slog.Handler {
-	newHandlers := make([]slog.Handler, len(h.handlers))
-	for i, handler := range h.handlers {
-		newHandlers[i] = handler.WithGroup(name)
-	}
-	return &multiHandler{handlers: newHandlers}
+func (h *stderrLoggingHandler) WithGroup(name string) slog.Handler {
+	return &stderrLoggingHandler{Handler: h.Handler.WithGroup(name)}
 }
 
 // --- 核心日志方法 ---
@@ -1090,7 +1083,7 @@ func (l *SLogger) log(ctx context.Context, level slog.Level, msg string, args ..
 	}
 
 	// 同步模式：直接处理，不走环形缓冲区
-	if !l.asyncEnabled || l.ringBuf == nil {
+	if l.asyncEnabled == nil || !l.asyncEnabled.Load() || l.ringBuf == nil {
 		if timing.enabled.Load() {
 			timing.logSyncPath.Add(1)
 		}
@@ -1182,7 +1175,9 @@ func (l *SLogger) processEntryDirect(ctx context.Context, level slog.Level, msg 
 	}
 
 	endSlogCall := timing.startTimer(&timing.slogCallNS)
-	timing.entriesHandled.Add(1)
+	if timing.enabled.Load() {
+		timing.entriesHandled.Add(1)
+	}
 
 	// 直接调用 handler.Handle，绕过 slog.Logger 内部的 time.Now + Enabled 检查
 	record := slog.NewRecord(time.Now(), level, msg, 0)
@@ -1225,7 +1220,9 @@ func (l *SLogger) processEntry(entry *logEntry) {
 
 	endProc := timing.startTimer(&timing.asyncProcessNS)
 	defer endProc()
-	timing.entriesHandled.Add(1)
+	if timing.enabled.Load() {
+		timing.entriesHandled.Add(1)
+	}
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -1518,7 +1515,10 @@ func (l *SLogger) SetLevel(level string) {
 		slogLevel = slog.LevelWarn
 	case "error":
 		slogLevel = slog.LevelError
+	case "":
+		slogLevel = slog.LevelInfo // 空值等价于缺省级别，静默取默认
 	default:
+		fmt.Fprintf(os.Stderr, "[treasure-slog] unknown level %q, falling back to info\n", level)
 		slogLevel = slog.LevelInfo
 	}
 	l.level.Store(int32(slogLevel))
@@ -1568,7 +1568,9 @@ func (l *SLogger) Sync() error {
 			l.wg.Wait()
 		}
 		l.workers = nil
-		l.asyncEnabled = false // 后续日志直接走同步路径，避免异步推入后降级的开销
+		if l.asyncEnabled != nil {
+			l.asyncEnabled.Store(false) // 后续日志直接走同步路径，避免异步推入后降级的开销
+		}
 		if l.batchWriter != nil {
 			if err := l.batchWriter.Close(); err != nil {
 				errs = append(errs, err)

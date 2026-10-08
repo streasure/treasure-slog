@@ -19,7 +19,7 @@ func makeAsyncLogger(b *testing.B, level slog.Level, workers, bufSize int) *SLog
 	s := &SLogger{
 		hooks:        []Hook{},
 		wg:           &sync.WaitGroup{},
-		asyncEnabled: true,
+		asyncEnabled: newAtomicBool(true),
 		usePool:      true,
 		level:        &atomic.Int32{},
 		levelVar:     &slog.LevelVar{},
@@ -49,7 +49,7 @@ func makeSyncLogger(b *testing.B, level slog.Level) *SLogger {
 	s := &SLogger{
 		hooks:        []Hook{},
 		wg:           &sync.WaitGroup{},
-		asyncEnabled: false,
+		asyncEnabled: newAtomicBool(false),
 		usePool:      false,
 		level:        &atomic.Int32{},
 		levelVar:     &slog.LevelVar{},
@@ -68,7 +68,7 @@ func makeAsyncLoggerWithBatch(b *testing.B, level slog.Level, workers, bufSize, 
 	s := &SLogger{
 		hooks:        []Hook{},
 		wg:           &sync.WaitGroup{},
-		asyncEnabled: true,
+		asyncEnabled: newAtomicBool(true),
 		usePool:      true,
 		level:        &atomic.Int32{},
 		levelVar:     &slog.LevelVar{},
@@ -109,7 +109,7 @@ func BenchmarkAllLevelsAsync(b *testing.B) {
 	ctx := context.Background()
 
 	// 预热
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		s.Info(ctx, "warmup i=%d", i)
 	}
 	time.Sleep(50 * time.Millisecond)
@@ -263,7 +263,7 @@ func BenchmarkExtremeConcurrency(b *testing.B) {
 			s := makeAsyncLogger(b, slog.LevelDebug, 8, 2000000)
 			defer s.Sync()
 			ctx := context.Background()
-			for i := 0; i < 1000; i++ {
+			for i := range 1000 {
 				s.Info(ctx, "warmup i=%d", i)
 			}
 			time.Sleep(50 * time.Millisecond)
@@ -271,14 +271,12 @@ func BenchmarkExtremeConcurrency(b *testing.B) {
 
 			var wg sync.WaitGroup
 			perG := b.N / conc
-			for i := 0; i < conc; i++ {
-				wg.Add(1)
-				go func(id int) {
-					defer wg.Done()
-					for j := 0; j < perG; j++ {
-						s.Info(ctx, "extreme g=%d j=%d", id, j)
+			for i := range conc {
+				wg.Go(func() {
+					for j := range perG {
+						s.Info(ctx, "extreme g=%d j=%d", i, j)
 					}
-				}(i)
+				})
 			}
 			wg.Wait()
 			b.StopTimer()
@@ -295,7 +293,7 @@ func BenchmarkWorkerScalability(b *testing.B) {
 			s := makeAsyncLogger(b, slog.LevelDebug, workers, 2000000)
 			defer s.Sync()
 			ctx := context.Background()
-			for i := 0; i < 1000; i++ {
+			for i := range 1000 {
 				s.Info(ctx, "warmup i=%d", i)
 			}
 			time.Sleep(50 * time.Millisecond)
@@ -355,7 +353,7 @@ func BenchmarkAllInterfaces10M(b *testing.B) {
 	ctx := context.Background()
 
 	// 预热
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		s.Info(ctx, "warmup i=%d", i)
 	}
 	time.Sleep(50 * time.Millisecond)
@@ -379,7 +377,7 @@ func BenchmarkThroughputMax(b *testing.B) {
 	s := makeAsyncLogger(b, slog.LevelDebug, 8, 2000000)
 	defer s.Sync()
 	ctx := context.Background()
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		s.Info(ctx, "warmup i=%d", i)
 	}
 	time.Sleep(50 * time.Millisecond)
@@ -401,7 +399,7 @@ func BenchmarkWorkerBatchSize(b *testing.B) {
 			s := makeAsyncLoggerWithBatch(b, slog.LevelDebug, 8, 2000000, bs)
 			defer s.Sync()
 			ctx := context.Background()
-			for i := 0; i < 1000; i++ {
+			for i := range 1000 {
 				s.Info(ctx, "warmup i=%d", i)
 			}
 			time.Sleep(50 * time.Millisecond)
@@ -424,7 +422,7 @@ func BenchmarkShardCount(b *testing.B) {
 			s := makeAsyncLogger(b, slog.LevelDebug, shards, 2000000)
 			defer s.Sync()
 			ctx := context.Background()
-			for i := 0; i < 1000; i++ {
+			for i := range 1000 {
 				s.Info(ctx, "warmup i=%d", i)
 			}
 			time.Sleep(50 * time.Millisecond)
@@ -448,7 +446,7 @@ func BenchmarkPrintfStyleAsync(b *testing.B) {
 	defer s.Sync()
 
 	ctx := context.Background()
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		s.Info(ctx, "warmup i=%d", i)
 	}
 	time.Sleep(50 * time.Millisecond)
@@ -505,16 +503,18 @@ func BenchmarkPrintfLevelFiltered(b *testing.B) {
 	ctx := context.Background()
 
 	b.Run("Debugf_Filtered", func(b *testing.B) {
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		i := 0
+		for b.Loop() {
 			s.Debug(ctx, "debug msg %d %s", i, "val")
+			i++
 		}
 	})
 
 	b.Run("Debug_KeyValue_Filtered", func(b *testing.B) {
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		i := 0
+		for b.Loop() {
 			s.Debug(ctx, "debug msg key=%d val=%s", i, "val")
+			i++
 		}
 	})
 }
@@ -525,7 +525,7 @@ func BenchmarkPrintfComplexFormat(b *testing.B) {
 	defer s.Sync()
 
 	ctx := context.Background()
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		s.Info(ctx, "warmup i=%d", i)
 	}
 	time.Sleep(50 * time.Millisecond)
@@ -549,7 +549,7 @@ func BenchmarkAllInterfaces10MWithPrintf(b *testing.B) {
 	defer s.Sync()
 
 	ctx := context.Background()
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		s.Info(ctx, "warmup i=%d", i)
 	}
 	time.Sleep(50 * time.Millisecond)
@@ -594,37 +594,32 @@ func BenchmarkWithContext(b *testing.B) {
 	emptyCtx := context.Background()
 
 	b.Run("WithContext_Create_WithData", func(b *testing.B) {
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = s.WithContext(ctx)
 		}
 	})
 
 	b.Run("WithContext_Create_EmptyCtx", func(b *testing.B) {
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = s.WithContext(emptyCtx)
 		}
 	})
 
 	b.Run("WithContext_ThenLog", func(b *testing.B) {
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			ctxLog := s.WithContext(ctx)
 			ctxLog.Info(ctx, "test message")
 		}
 	})
 
 	b.Run("DirectLog_WithData", func(b *testing.B) {
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			s.Info(ctx, "test message")
 		}
 	})
 
 	b.Run("DirectLog_EmptyCtx", func(b *testing.B) {
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			s.Info(emptyCtx, "test message")
 		}
 	})

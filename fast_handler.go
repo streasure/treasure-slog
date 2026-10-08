@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -177,7 +178,15 @@ func appendAttrValue(buf []byte, v slog.Value) []byte {
 	case slog.KindUint64:
 		buf = strconv.AppendUint(buf, v.Uint64(), 10)
 	case slog.KindFloat64:
-		buf = strconv.AppendFloat(buf, v.Float64(), 'f', -1, 64)
+		f := v.Float64()
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			// NaN/Inf 无 JSON 字面量表示，输出为字符串保证整行仍是合法 JSON
+			buf = append(buf, '"')
+			buf = strconv.AppendFloat(buf, f, 'g', -1, 64)
+			buf = append(buf, '"')
+		} else {
+			buf = strconv.AppendFloat(buf, f, 'f', -1, 64)
+		}
 	case slog.KindTime:
 		buf = append(buf, '"')
 		buf = v.Time().AppendFormat(buf, time.RFC3339Nano)

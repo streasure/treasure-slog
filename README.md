@@ -2,12 +2,12 @@
 
 基于 Go 原生 `log/slog` 构建的高性能结构化日志库。
 
-- 零反射 JSON 序列化（FastHandler），纯序列化路径 **0 次内存分配**，吞吐约 **2900 万条/秒**
-- 同步模式约 **1800 万条/秒**，异步模式约 **800 万条/秒**，核心路径 0~2 次分配
+- 零反射 JSON 序列化（FastHandler），纯序列化路径 **0 次内存分配**，吞吐约 **1700 万条/秒**
+- 同步模式约 **490 万条/秒**，异步模式约 **320 万条/秒**，核心路径 0~3 次分配
 - 分片环形缓冲区 + 多 worker 批量写入，高并发（8~256 goroutine）下吞吐稳定
 - 支持文件轮转、网络输出（TCP/UDP/HTTP）、日志采样、Hook、动态级别、Context 追踪注入
 
-> 以上数据实测于 Intel i5-10400F（12 逻辑核）/ Windows / Go 1.22.5，复现命令见[性能实测](#性能实测)。
+> 以上数据实测于 Intel i5-10400F（12 逻辑核）/ Windows / Go 1.26.5，复现命令见[性能实测](#性能实测)。
 
 ## 特性
 
@@ -17,7 +17,7 @@
 | 异步管线 | 分片环形缓冲区（每 worker 独占 shard，MPSC）+ worker 批量消费，缓冲区满自动降级同步，不丢日志 |
 | 同步模式 | `async.enabled: false` 时直接写入，绕过队列，延迟最低 |
 | 多输出 | 控制台、文件、网络（TCP/UDP/HTTP，支持 TLS 与重试）可任意组合 |
-| 文件轮转 | 按大小/时间轮转，支持备份保留、过期清理、gzip 异步压缩 |
+| 文件轮转 | 按大小/时间轮转，支持备份保留、过期清理 |
 | 日志采样 | 前 N 条全量记录，其后按频率采样，应对高频日志 |
 | 动态级别 | `SetLevel` 运行时调整，`With` 派生的 logger 全链路共享级别状态 |
 | Context 注入 | `WithContext` 自动提取 `request_id` / `user_id` / `span_id` / `trace_id` |
@@ -27,7 +27,7 @@
 
 ## 环境要求
 
-- Go 1.22+
+- Go 1.26+
 - 依赖：仅标准库 + `gopkg.in/yaml.v3`
 
 ## 安装
@@ -74,7 +74,7 @@ import (
 )
 
 func main() {
-    if _, err := logger.New("configs/config.yaml"); err != nil {
+    if _, err := logger.New("configs/tlog.yaml"); err != nil {
         panic(err)
     }
     defer logger.Sync()
@@ -111,7 +111,7 @@ import (
 )
 
 func main() {
-    if _, err := logger.New("configs/config.yaml"); err != nil {
+    if _, err := logger.New("configs/tlog.yaml"); err != nil {
         panic(err)
     }
     defer logger.Sync()
@@ -153,16 +153,16 @@ import (
 )
 
 func main() {
-    if _, err := logger.New("configs/config.yaml"); err != nil {
+    if _, err := logger.New("configs/tlog.yaml"); err != nil {
         panic(err)
     }
     defer logger.Sync()
     
-    // 模拟 HTTP 请求 context
+    // 模拟 HTTP 请求 context（必须使用 logger.ContextKey* 类型化 key）
     ctx := context.Background()
-    ctx = context.WithValue(ctx, "request_id", "req-abc-123")
-    ctx = context.WithValue(ctx, "trace_id", "trace-xyz-789")
-    ctx = context.WithValue(ctx, "user_id", "user-456")
+    ctx = context.WithValue(ctx, logger.ContextKeyRequestID, "req-abc-123")
+    ctx = context.WithValue(ctx, logger.ContextKeyTraceID, "trace-xyz-789")
+    ctx = context.WithValue(ctx, logger.ContextKeyUserID, "user-456")
     
     // 方式1：每次调用时传入 ctx（自动提取 trace 信息）
     logger.Info(ctx, "处理请求")
@@ -173,6 +173,8 @@ func main() {
     ctxLog.Info(ctx, "处理完成 latency=%dms", 45)
 }
 ```
+
+> **注意**：提取只认导出的 `logger.ContextKeyRequestID` / `ContextKeyUserID` / `ContextKeySpanID` / `ContextKeyTraceID` 类型化 key；裸字符串 key（如 `context.WithValue(ctx, "request_id", ...)`）不会被提取，也不会出现在输出中。
 
 **输出示例：**
 ```json
@@ -206,7 +208,7 @@ func (h *MetricsHook) Run(msg string, level string, args ...any) {
 }
 
 func main() {
-    if _, err := logger.New("configs/config.yaml"); err != nil {
+    if _, err := logger.New("configs/tlog.yaml"); err != nil {
         panic(err)
     }
     defer logger.Sync()
@@ -245,7 +247,7 @@ import (
 )
 
 func main() {
-    if _, err := logger.New("configs/config.yaml"); err != nil {
+    if _, err := logger.New("configs/tlog.yaml"); err != nil {
         panic(err)
     }
     defer logger.Sync()
@@ -267,7 +269,7 @@ func main() {
 
 ### 6. Recover 方法 - Panic 恢复
 
-自动捕获 panic 并记录错误日志与堆栈信息。
+自动捕获 panic 并记录错误日志与堆栈信息，随后**重新抛出**（不吞掉 panic，进程仍会崩溃，此 API 用于自动补齐崩溃现场日志）。
 
 ```go
 package main
@@ -279,12 +281,12 @@ import (
 )
 
 func main() {
-    if _, err := logger.New("configs/config.yaml"); err != nil {
+    if _, err := logger.New("configs/tlog.yaml"); err != nil {
         panic(err)
     }
     defer logger.Sync()
     
-    // 使用 Recover 捕获 panic
+    // 记录 panic 现场后重新抛出（进程仍会崩溃）
     defer logger.Recover()
     
     // 模拟 panic
@@ -311,7 +313,7 @@ import (
 )
 
 func main() {
-    if _, err := logger.New("configs/config.yaml"); err != nil {
+    if _, err := logger.New("configs/tlog.yaml"); err != nil {
         panic(err)
     }
     
@@ -339,7 +341,7 @@ import (
 )
 
 func main() {
-    if _, err := logger.New("configs/config.yaml"); err != nil {
+    if _, err := logger.New("configs/tlog.yaml"); err != nil {
         panic(err)
     }
     defer logger.Sync()
@@ -376,7 +378,11 @@ slog调用:         avg=50 ns   total=50000 ns
 type Hook interface {
     Run(msg string, level string, args ...any)
 }
+```
 
+> **说明**：`args` 仅包含从 context 提取的字段（`request_id` 等）与 `With` 无关；`Info(ctx, "格式 %s", 参数)` 的格式化参数已内嵌进 msg，不会作为结构化参数传入 Hook。
+
+```go
 // AlertHook 示例：Error 级别时发送告警
 type AlertHook struct {
     AlertFunc func(msg string)
@@ -397,6 +403,19 @@ alertHook := &AlertHook{
 }
 hookedLog := logger.AddHook(alertHook)
 ```
+
+### 10. 与标准 slog JSONHandler 的输出差异
+
+FastHandler 为零分配手写序列化，以下语义与标准库 `slog.JSONHandler` 不同（均为有意取舍）：
+
+| 场景 | 本库输出 | slog.JSONHandler |
+|------|---------|------------------|
+| `WithGroup("a")` 后的属性 | 拍平为点号 key `"a.k"` | 嵌套对象 `{"a":{"k":...}}` |
+| Duration 属性 | 字符串 `"1.5s"` | 纳秒数 `1500000000` |
+| `[]byte` 属性 | `%v` 文本字符串 | base64 字符串 |
+| NaN / ±Inf 浮点 | 字符串 `"NaN"` / `"+Inf"` | 返回编码错误 |
+
+与本库自有的 `KindGroup`（分组 key）嵌套输出不冲突：`WithGroup` 是"预设 key 前缀"语义，始终拍平；`slog.Group` 属性才产生嵌套。
 
 ## 运行示例
 
@@ -421,11 +440,11 @@ log:
   # 日志格式: json（FastHandler 零反射）| console / text（标准 TextHandler）
   format: json
 
-  # 异步配置（整个 async 块缺省时默认启用，走默认值）
+  # 异步配置（async 块缺省或未写 enabled 键时默认启用；显式 enabled: false 才是同步模式）
   async:
     enabled: true            # false 时为同步模式
     buffer_size: 10000       # 环形缓冲区容量（向上取整到 2 的幂，按 worker 分片）
-    batch_size: 100          # worker 单批处理条数
+    batch_size: 100          # 批量阈值：worker 每攒 batch_size 条处理；异步刷盘按 batch_size×1KB 字节聚合
     flush_interval: 100      # 刷新间隔（毫秒）
     worker_multiplier: 1     # worker 数 = CPU 核数 × 倍数（默认 1，最大 32）
 
@@ -442,8 +461,7 @@ log:
       max_size: 100          # 单文件上限（MB），默认 100
       max_backups: 10         # 保留备份数，默认 10
       max_age: 30             # 保留天数，默认 30
-      compress: false         # 旧文件 gzip 异步压缩
-      interval: 0s            # 时间轮转间隔（如 24h），0 = 禁用
+      interval: 0             # 时间轮转间隔（秒），如 86400 = 每天切割；0 = 禁用
 
   # 网络输出（ELK / Graylog 等）
   network:
@@ -502,8 +520,7 @@ Worker 数量根据 CPU 核数自动计算：`worker 数 = CPU 核数 × 倍数`
 log:
   async:
     worker_multiplier: 1     # 默认值：worker 数 = CPU 核数
-    worker_multiplier: 2     # 高并发：worker 数 = CPU 核数 × 2
-    worker_multiplier: 0.5   # 低资源：worker 数 = CPU 核数 / 2
+    worker_multiplier: 2     # 高并发：worker 数 = CPU 核数 × 2（仅支持整数倍数）
 ```
 
 **计算规则：**
@@ -526,7 +543,7 @@ log:
 |------|------|------|
 | `tlog.dev.yaml` | 开发 | 同步模式 + 控制台 text + debug 级别 |
 | `tlog.yaml` | 通用 | 异步 + 文件输出 + 采样 + error 堆栈 |
-| `tlog.prod.yaml` | 生产 | 异步 worker_multiplier=1 + 文件轮转压缩 + 采样 |
+| `tlog.prod.yaml` | 生产 | 异步 worker_multiplier=1 + 文件轮转 + 采样 |
 | `tlog.highperf.yaml` | 极限吞吐 | 1M 缓冲 + worker_multiplier=2 + 全部性能开关 |
 
 **使用方式：**
@@ -547,7 +564,7 @@ logger.New("configs/tlog.prod.yaml")
         ▼
    级别快速过滤（atomic load，未达级别直接返回）
         │
-        ├── 同步模式 ──► processEntryDirect ──► FastHandler 序列化 ──► bufio 批量写入 ──► 控制台/文件/网络
+        ├── 同步模式 ──► processEntryDirect ──► FastHandler 序列化 ──► 直接写入 控制台/文件/网络
         │
         └── 异步模式 ──► sync.Pool 取 logEntry ──► 分片环形缓冲区（round-robin 选 shard）
                                     │
@@ -578,35 +595,35 @@ logger.New("configs/tlog.prod.yaml")
 
 ## 性能实测
 
-> 环境：Intel i5-10400F @ 2.90GHz（12 逻辑核），Windows，Go 1.22.5，`benchtime=1s`
+> 环境：Intel i5-10400F @ 2.90GHz（12 逻辑核），Windows，Go 1.26.5，`benchtime=1s`
 > 下列 QPS 为 `RunParallel` 12 goroutine 聚合吞吐（io.Discard，纯管线；FullLink 除外）
 
 ### 核心指标
 
 | 场景 | 每条耗时 | 吞吐 | 内存/条 | 分配次数 |
 |------|---------|------|--------|---------|
-| 纯序列化（直接调 FastHandler） | ~32 ns | ~3086 万/s | 0 B | **0** |
-| 同步模式（全级别混合） | ~111 ns | ~899 万/s | 156 B | 2 |
-| 极限吞吐（Info 单参数） | ~152 ns | ~658 万/s | 140 B | 1 |
-| 异步模式（全级别混合） | ~197 ns | ~508 万/s | 157 B | 2 |
-| 全接口混合（8 种调用方式） | ~180 ns | ~556 万/s | 156 B | 2 |
-| 全链路（真实文件轮转 I/O） | ~1.0-1.4 µs | ~950 万/s | — | — |
+| 纯序列化（直接调 FastHandler） | ~56-67 ns | ~1490-1775 万/s | 0 B | **0** |
+| 同步模式（全级别混合） | ~204 ns | ~491 万/s | 156 B | 2 |
+| 极限吞吐（Info 单参数） | ~288 ns | ~347 万/s | 144 B | 1 |
+| 异步模式（全级别混合） | ~311 ns | ~322 万/s | 201 B | 3 |
+| 全接口混合（8 种调用方式） | ~644 ns | ~155 万/s | 162 B | 2 |
+| 全链路（真实文件轮转 I/O） | ~807 ns | ~124 万/s | 263 B | 3 |
 
 ### 高并发稳定性（异步管线）
 
 | 并发 goroutine | 8 | 16 | 32 | 64 | 128 | 256 |
 |----------------|-----|-----|-----|-----|------|-----|
-| 吞吐（万/s） | ~488 | ~493 | ~498 | ~565 | ~578 | ~588 |
+| 吞吐（万/s） | ~333 | ~312 | ~336 | ~275 | ~282 | ~295 |
 
-分片设计下 8~256 并发吞吐随并发度提升而增长，无锁竞争衰减。
+8~256 并发吞吐维持在 ~275-336 万/s，无锁竞争导致的明显衰减。
 
 ### Worker 扩展性（异步管线）
 
 | Worker 数 | 1 | 2 | 4 | 8 | 16 | 32 |
 |-----------|-----|-----|-----|-----|-----|-----|
-| 吞吐（万/s） | ~483 | ~671 | ~556 | ~546 | ~508 | ~535 |
+| 吞吐（万/s） | ~259 | ~284 | ~299 | ~310 | ~255 | ~244 |
 
-2~4 worker 即可打满消费能力，更多 worker 用于削峰。
+8 worker 附近吞吐最高，16~32 worker 因唤醒与切换开销反而略降；1~4 worker 已达约八成水平。
 
 ### 复现命令
 
@@ -620,8 +637,8 @@ go test -run=^$ -bench "BenchmarkExtremeConcurrency|BenchmarkWorkerScalability" 
 1. **控制字段数量**：字段 ≤5 时序列化与参数传递开销最小
 2. **生产环境禁用控制台**：`console.enabled: false`，多路输出有聚合开销
 3. **高频日志启用采样**：`sampling.enabled: true`，优先在入口丢弃
-4. **异步参数按内存预算配置**：`buffer_size × 单条日志大小 ≈ 峰值内存占用`；大日志场景用小缓冲小批量（参考 `configs/config.large.yaml`）
-5. **worker 不必过多**：2~4 worker 通常已打满（见扩展性数据），高并发场景按 CPU 核数 1~2 倍
+4. **异步参数按内存预算配置**：实际容量因 2 的幂取整与每 shard 最小 256 上取整，约为 `buffer_size` 的 2~3 倍（`prealloc: true` 再 ×2），乘单条日志大小即峰值内存；大日志场景调小 `buffer_size` 与 `batch_size`
+5. **worker 不必过多**：4~8 worker 吞吐最高，16 以上因唤醒与切换开销反而下降（见扩展性数据）
 6. **定位瓶颈**：`EnableTiming(true)` + `DumpTiming()` 查看各阶段耗时分布
 
 ## 测试
@@ -647,11 +664,11 @@ go test -run "TestLockContention" -v   # 锁竞争与高并发稳定性
 
 **性能不达标？**
 - 参见[性能调优建议](#性能调优建议)；用 `EnableTiming` 定位慢阶段
-- 文件场景检查磁盘 I/O 与轮转/压缩配置（`compress: true` 会消耗 CPU）
+- 文件场景检查磁盘 I/O 与轮转配置（`max_size` 过小会频繁轮转）
 
 **内存占用高？**
 - 减小 `buffer_size`；关闭 `prealloc`
-- 大日志场景参考 `configs/config.large.yaml` 的小缓冲小批量配置
+- 大日志场景调小 `buffer_size` 与 `batch_size`，减少单条日志在内存中的滞留
 
 ## 许可证
 

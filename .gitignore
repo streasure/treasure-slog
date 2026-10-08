@@ -2,3 +2,14 @@
 *.log
 *.log.*
 logs/
+
+# IDE / 编辑器
+.idea/
+.vscode/
+*.swp
+
+# 测试 / 构建产物
+coverage.out
+*.test
+*.exe
+

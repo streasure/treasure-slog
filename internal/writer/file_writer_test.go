@@ -195,9 +195,9 @@ func TestRotate_ByTime(t *testing.T) {
 func TestCleanup_MaxBackups(t *testing.T) {
 	dir := tempDir(t)
 	fw, err := NewFileWriter(FileWriterConfig{
-		Dir:      dir,
-		BaseName: "app",
-		MaxSize:  10,
+		Dir:        dir,
+		BaseName:   "app",
+		MaxSize:    10,
 		MaxBackups: 2,
 	})
 	if err != nil {
@@ -206,7 +206,7 @@ func TestCleanup_MaxBackups(t *testing.T) {
 	defer fw.Close()
 
 	// 多次轮转
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		fw.Write(bytes.Repeat([]byte("x"), 15))
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -266,19 +266,17 @@ func TestConcurrentWrite(t *testing.T) {
 	var wg sync.WaitGroup
 	errCh := make(chan error, 100)
 
-	for i := 0; i < 10; i++ {
-		wg.Add(1)
-		go func(id int) {
-			defer wg.Done()
-			for j := 0; j < 100; j++ {
-				msg := fmt.Sprintf("goroutine-%d-msg-%d\n", id, j)
+	for i := range 10 {
+		wg.Go(func() {
+			for j := range 100 {
+				msg := fmt.Sprintf("goroutine-%d-msg-%d\n", i, j)
 				_, err := fw.Write([]byte(msg))
 				if err != nil {
-					errCh <- fmt.Errorf("goroutine %d: %v", id, err)
+					errCh <- fmt.Errorf("goroutine %d: %v", i, err)
 					return
 				}
 			}
-		}(i)
+		})
 	}
 
 	wg.Wait()
@@ -298,7 +296,7 @@ func TestConcurrentWrite(t *testing.T) {
 		}
 		totalLines += bytes.Count(data, []byte("\n"))
 	}
-	// 允许少量行在压缩+轮转并发场景下丢失（异步压缩可能删除原始文件）
+	// 当前 + 轮转备份文件总行数；写入与轮转并发切换期间允许极少量丢失
 	if totalLines < 990 {
 		t.Fatalf("expected >= 990 total lines across all files, got %d", totalLines)
 	}
