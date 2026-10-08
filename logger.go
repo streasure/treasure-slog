@@ -339,7 +339,11 @@ func newBatchWriter(writer io.Writer, batchSize int, interval time.Duration) *ba
 		batchSize: batchSize,
 		interval:  interval,
 	}
+	// 持锁启动定时器：flush/Close 都在锁内访问 bw.timer，
+	// 构造侧的赋值也须在锁内，否则与首个 flush 回调构成数据竞争
+	bw.mu.Lock()
 	bw.timer = time.AfterFunc(interval, bw.flush)
+	bw.mu.Unlock()
 	return bw
 }
 
