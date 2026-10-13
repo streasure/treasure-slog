@@ -222,7 +222,10 @@ type rbShard struct {
 	tail uint64
 	mu   sync.Mutex
 	drop atomic.Int64
-	_    [40]byte // cache line padding，防止 false sharing
+	// notify 是 cap=1 的唤醒邮箱：push 成功后非阻塞投递，消费者阻塞等待。
+	// 取代 worker 侧 50µs~2ms 空转轮询（30 分钟压测中占 ~15% CPU）。
+	notify chan struct{}
+	_      [40]byte // cache line padding，防止 false sharing
 }
 
 func newRingBuffer(capacity int) *ringBuffer {
@@ -257,9 +260,10 @@ func newShardedRingBuffer(capacity, shards int) *ringBuffer {
 	rb.shards = make([]*rbShard, shards)
 	for i := 0; i < shards; i++ {
 		rb.shards[i] = &rbShard{
-			buf:  make([]*logEntry, perShard),
-			cap:  perShard,
-			mask: perShard - 1,
+			buf:    make([]*logEntry, perShard),
+			cap:    perShard,
+			mask:   perShard - 1,
+			notify: make(chan struct{}, 1),
 		}
 	}
 	return rb
@@ -284,7 +288,20 @@ func (s *rbShard) push(entry *logEntry) bool {
 	s.buf[s.tail&s.mask] = entry
 	s.tail++
 	s.mu.Unlock()
+	// 唤醒消费者：cap=1 邮箱合并唤醒（已有待处理信号则丢弃本次）
+	select {
+	case s.notify <- struct{}{}:
+	default:
+	}
 	return true
+}
+
+// ShardNotify 返回分片的通知通道（生产者 push 后非阻塞唤醒消费者）。
+func (rb *ringBuffer) ShardNotify(shardIdx int) <-chan struct{} {
+	if shardIdx < 0 || shardIdx >= rb.ns {
+		return nil
+	}
+	return rb.shards[shardIdx].notify
 }
 
 // PopBatch 批量弹出（减少锁次数）：单消费者，连续推进 head
@@ -649,72 +666,43 @@ func (w *worker) run() {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	idleSpin := 0
+	// 消费者阻塞等待生产者唤醒（cap=1 邮箱），彻底消除空转轮询：
+	// 旧实现在空闲时 Gosched/50µs~2ms 短睡循环（压测中 ~15% CPU 空转）。
+	var notify <-chan struct{}
+	if w.logger != nil && w.logger.ringBuf != nil {
+		notify = w.logger.ringBuf.ShardNotify(w.id)
+	}
+
+	drain := func() {
+		for {
+			n := w.logger.ringBuf.PopBatch(w.id, batch[:cap(batch)])
+			if n == 0 {
+				return
+			}
+			w.processBatch(batch[:n])
+		}
+	}
 
 	for {
-		// 安全检查
+		// 安全检查（logger 热替换等罕见路径）：无 ring 时退化为仅靠 ticker/stop 驱动
 		if w.logger == nil || w.logger.ringBuf == nil {
 			select {
 			case <-w.stopCh:
 				return
 			case <-ticker.C:
 				continue
-			default:
-				time.Sleep(200 * time.Microsecond)
-				continue
 			}
 		}
 
-		// 尝试从 ring buffer 弹出条目
-		processed := false
-		if cap(batch) > 0 && len(batch) < cap(batch) {
-			n := w.logger.ringBuf.PopBatch(w.id, batch[len(batch):cap(batch)])
-			if n > 0 {
-				batch = batch[:len(batch)+n]
-				processed = true
-				idleSpin = 0
-				if len(batch) >= batchSize {
-					w.processBatch(batch)
-					batch = batch[:0]
-				}
-			}
-		}
+		drain()
 
-		// 非阻塞 select + 空闲退避：既保证延迟又避免 CPU 空转
+		// 阻塞等待：生产者唤醒 / 兜底 flush tick（残批落盘）/ 停止
 		select {
 		case <-w.stopCh:
-			if len(batch) > 0 {
-				w.processBatch(batch)
-				batch = batch[:0]
-			}
-			for {
-				n := w.logger.ringBuf.PopBatch(w.id, batch[:cap(batch)])
-				if n == 0 {
-					break
-				}
-				w.processBatch(batch[:n])
-				batch = batch[:0]
-			}
+			drain()
 			return
+		case <-notify:
 		case <-ticker.C:
-			if len(batch) > 0 {
-				w.processBatch(batch)
-				batch = batch[:0]
-			}
-		default:
-			if !processed {
-				idleSpin++
-				switch {
-				case idleSpin < 32:
-					runtime.Gosched()
-				case idleSpin < 256:
-					time.Sleep(50 * time.Microsecond)
-				case idleSpin < 4096:
-					time.Sleep(500 * time.Microsecond)
-				default:
-					time.Sleep(2 * time.Millisecond)
-				}
-			}
 		}
 	}
 }
