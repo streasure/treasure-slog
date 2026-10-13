@@ -21,6 +21,7 @@ log:
     level: error
   sampling:
     enabled: true
+    tick: 1
     initial: 100000
     thereafter: 10000
   performance:

@@ -915,6 +915,7 @@ func New(configPath string) (*SLogger, error) {
 		handler = NewSamplingHandler(handler, SamplingOptions{
 			Initial:    cfg.Log.Sampling.Initial,
 			Thereafter: cfg.Log.Sampling.Thereafter,
+			Tick:       time.Duration(cfg.Log.Sampling.Tick) * time.Second,
 		})
 	}
 
@@ -1682,21 +1683,94 @@ func Recover() {
 	}
 }
 
-// --- SamplingHandler ---
+// --- SamplingHandler（对齐 zapcore.Sampler 语义：per-(level, message) + tick 窗口） ---
 
-type SamplingOptions struct {
-	Initial    int
-	Thereafter int
-}
+const (
+	samplingLevels        = 4 // debug / info / warn / error 四个级别桶
+	samplingBucketsPerLvl = 4096
+)
 
-type SamplingHandler struct {
-	handler slog.Handler
-	options SamplingOptions
+type samplingCounter struct {
+	resetAt atomic.Int64
 	count   atomic.Uint64
 }
 
+type samplingCounters struct {
+	counts [samplingLevels][samplingBucketsPerLvl]samplingCounter
+}
+
+// incCheckReset 计数并在窗口过期时重置（与 zapcore.counter.IncCheckReset 相同的 CAS 窗口推进逻辑）
+func (c *samplingCounter) incCheckReset(now time.Time, tick time.Duration) uint64 {
+	tn := now.UnixNano()
+	resetAfter := c.resetAt.Load()
+	if resetAfter > tn {
+		return c.count.Add(1)
+	}
+	c.count.Store(1)
+	newResetAfter := tn + tick.Nanoseconds()
+	if !c.resetAt.CompareAndSwap(resetAfter, newResetAfter) {
+		return c.count.Add(1)
+	}
+	return 1
+}
+
+// samplingLevelIndex 将 slog 级别映射到计数器组下标
+func samplingLevelIndex(l slog.Level) int {
+	switch {
+	case l <= slog.LevelDebug:
+		return 0
+	case l < slog.LevelWarn:
+		return 1
+	case l < slog.LevelError:
+		return 2
+	default:
+		return 3
+	}
+}
+
+// samplingFnv32a 无分配字符串哈希，用于消息分桶（与 zap 相同：冲突合并计数，速度优先于绝对精确）
+func samplingFnv32a(s string) uint32 {
+	const (
+		offset32 = 2166136261
+		prime32  = 16777619
+	)
+	hash := uint32(offset32)
+	for i := 0; i < len(s); i++ {
+		hash ^= uint32(s[i])
+		hash *= prime32
+	}
+	return hash
+}
+
+// samplingStats 采样决策计数，派生 handler 共享同一份（对应 zap SamplerHook 的可观测性）
+type samplingStats struct {
+	dropped atomic.Uint64
+	sampled atomic.Uint64
+}
+
+type SamplingOptions struct {
+	Initial    int           // 每窗口内每种 (级别, 消息) 前 N 条全量保留
+	Thereafter int           // 窗口内超出 initial 后每 N 条保留 1 条；<=0 = 超出后全丢
+	Tick       time.Duration // 采样窗口时长，<=0 时取 1s；窗口重置后重新放行 initial 条
+}
+
+// SamplingHandler 采样 handler：对同一窗口内重复出现的同级别同消息限速。
+// 不同 (级别, 消息) 计数独立——info 洪水不影响 error 额度，每种错误消息都有自己的
+// 保留额度；持续刷屏时每个 tick 仍保留 initial 条代表样本，证据限速而不消失。
+type SamplingHandler struct {
+	handler  slog.Handler
+	options  SamplingOptions
+	counters *samplingCounters
+	stats    *samplingStats
+}
+
 func NewSamplingHandler(handler slog.Handler, options SamplingOptions) *SamplingHandler {
-	return &SamplingHandler{handler: handler, options: options}
+	return &SamplingHandler{
+		handler:  handler,
+		options:  options,
+		counters: &samplingCounters{},
+		stats:    &samplingStats{},
+	}
 }
 
 func (h *SamplingHandler) Handle(ctx context.Context, record slog.Record) error {
@@ -1705,32 +1779,48 @@ func (h *SamplingHandler) Handle(ctx context.Context, record slog.Record) error 
 			fmt.Fprintf(os.Stderr, "[treasure-slog] SamplingHandler.Handle panic recovered: %v\n", r)
 		}
 	}()
-	// ERROR 及以上不参与采样：故障日志是排障证据，任何情况下都不能丢，
-	// 且不消耗采样计数（不影响 info/debug 的采样密度）。
-	// 采样仅用于抑制 info/debug 等高频日志。
-	if record.Level >= slog.LevelError {
-		return h.handler.Handle(ctx, record)
+	tick := h.options.Tick
+	if tick <= 0 {
+		tick = time.Second
 	}
-	count := h.count.Add(1)
-	if h.options.Initial > 0 && count <= uint64(h.options.Initial) {
-		return h.handler.Handle(ctx, record)
+	ts := record.Time
+	if ts.IsZero() {
+		ts = time.Now()
 	}
-	if h.options.Thereafter > 0 && (count-uint64(h.options.Initial))%uint64(h.options.Thereafter) == 0 {
-		return h.handler.Handle(ctx, record)
+	c := &h.counters.counts[samplingLevelIndex(record.Level)][samplingFnv32a(record.Message)%samplingBucketsPerLvl]
+	count := c.incCheckReset(ts, tick)
+	if count > uint64(h.options.Initial) {
+		if h.options.Thereafter <= 0 || count%uint64(h.options.Thereafter) != 0 {
+			h.stats.dropped.Add(1)
+			return nil
+		}
 	}
-	return nil
+	h.stats.sampled.Add(1)
+	return h.handler.Handle(ctx, record)
 }
 
+// Dropped 返回因采样被丢弃的日志条数
+func (h *SamplingHandler) Dropped() uint64 { return h.stats.dropped.Load() }
+
+// Sampled 返回实际写出的日志条数
+func (h *SamplingHandler) Sampled() uint64 { return h.stats.sampled.Load() }
+
 func (h *SamplingHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	sh := &SamplingHandler{handler: h.handler.WithAttrs(attrs), options: h.options}
-	sh.count.Store(h.count.Load()) // 保留采样计数器
-	return sh
+	return &SamplingHandler{
+		handler:  h.handler.WithAttrs(attrs),
+		options:  h.options,
+		counters: h.counters,
+		stats:    h.stats,
+	}
 }
 
 func (h *SamplingHandler) WithGroup(name string) slog.Handler {
-	sh := &SamplingHandler{handler: h.handler.WithGroup(name), options: h.options}
-	sh.count.Store(h.count.Load()) // 保留采样计数器
-	return sh
+	return &SamplingHandler{
+		handler:  h.handler.WithGroup(name),
+		options:  h.options,
+		counters: h.counters,
+		stats:    h.stats,
+	}
 }
 
 func (h *SamplingHandler) Enabled(ctx context.Context, level slog.Level) bool {

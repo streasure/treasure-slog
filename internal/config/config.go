@@ -89,11 +89,12 @@ type StackConfig struct {
 	Depth   int    `yaml:"depth"`   // 堆栈最大抓取深度（帧数），默认 10，过深会影响性能
 }
 
-// SamplingConfig 日志采样配置，在高并发场景下按比例丢弃重复日志，降低 IO 和 CPU 开销
+// SamplingConfig 日志采样配置，在高并发场景下按 (级别, 消息) 维度限速重复日志，降低 IO 和 CPU 开销
 type SamplingConfig struct {
 	Enabled    bool `yaml:"enabled"`    // 是否启用采样
-	Initial    int  `yaml:"initial"`    // 前 N 条日志全部保留（不采样），默认 1000
-	Thereafter int  `yaml:"thereafter"` // 之后每 N 条日志保留 1 条，默认 100
+	Initial    int  `yaml:"initial"`    // 每个采样窗口内每种 (级别, 消息) 前 N 条全量保留（不采样），默认 1000
+	Thereafter int  `yaml:"thereafter"` // 窗口内超过 initial 后每 N 条保留 1 条，默认 100；0 = 超出后全丢
+	Tick       int  `yaml:"tick"`       // 采样窗口时长（秒），窗口重置后重新放行 initial 条，默认 1
 }
 
 // FieldCacheConfig 字段缓存配置（已废弃，保留用于向后兼容旧配置文件）
@@ -175,6 +176,9 @@ func setDefaults(cfg *Config) {
 		}
 		if cfg.Log.Sampling.Thereafter == 0 {
 			cfg.Log.Sampling.Thereafter = 100
+		}
+		if cfg.Log.Sampling.Tick <= 0 {
+			cfg.Log.Sampling.Tick = 1
 		}
 	}
 	// FieldCache 已废弃，不再设置默认值

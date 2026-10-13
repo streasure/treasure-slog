@@ -23,5 +23,6 @@ log:
     depth: 10
   sampling:
     enabled: true
+    tick: 1
     initial: 100
     thereafter: 10
