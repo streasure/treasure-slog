@@ -18,7 +18,7 @@
 | 同步模式 | `async.enabled: false` 时直接写入，绕过队列，延迟最低 |
 | 多输出 | 控制台、文件、网络（TCP/UDP/HTTP，支持 TLS 与重试）可任意组合 |
 | 文件轮转 | 按大小/时间轮转，支持备份保留、过期清理 |
-| 日志采样 | 前 N 条全量记录，其后按频率采样，应对高频日志 |
+| 日志采样 | 前 N 条全量记录，其后按频率采样，应对高频日志；ERROR 及以上永不采样 |
 | 动态级别 | `SetLevel` 运行时调整，`With` 派生的 logger 全链路共享级别状态 |
 | Context 注入 | `WithContext` 自动提取 `request_id` / `user_id` / `span_id` / `trace_id` |
 | Hook 机制 | 自定义钩子参与每条日志处理（指标上报、告警等），支持链式追加 |
@@ -478,7 +478,7 @@ log:
     level: error              # error | warn | info | debug
     depth: 10                 # 堆栈深度，默认 10
 
-  # 日志采样
+  # 日志采样（ERROR 及以上不参与采样，始终全量输出）
   sampling:
     enabled: false
     initial: 1000             # 前 N 条全量，默认 1000
@@ -585,7 +585,7 @@ logger.New("configs/tlog.prod.yaml")
 | `FastHandler` | 零反射 JSON 序列化：手写 appendJSONString / appendInt 等，512B 缓冲池化；纯序列化 0 分配 |
 | `batchWriter` | 聚合多条日志一次写入，按大小阈值与时间间隔双触发刷盘 |
 | `networkWriter` / `httpWriter` | 网络输出，失败自动重连/重试 |
-| `SamplingHandler` | 环绕式采样（前 N 条全量 + 之后按频率） |
+| `SamplingHandler` | 环绕式采样（前 N 条全量 + 之后按频率；ERROR 及以上放行且不占采样计数） |
 
 可靠性设计：
 
@@ -655,7 +655,7 @@ go test -run "TestLockContention" -v   # 锁竞争与高并发稳定性
 **日志没有输出？**
 - 确认已调用 `New`（全局函数在首次 `New` 前为 no-op）
 - 确认级别配置：`level: info` 时 `Debug` 不输出
-- 确认采样配置：`sampling.thereafter` 过小会丢弃大部分日志
+- 确认采样配置：`sampling.thereafter` 过小会丢弃大部分日志（仅影响 info/debug，ERROR 不受采样影响）
 - 退出前调用 `Sync()`，否则异步队列中的日志可能未落盘
 
 **日志文件位置不对？**

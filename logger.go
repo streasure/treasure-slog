@@ -458,7 +458,7 @@ func (nw *networkWriter) connect() error {
 func splitLineFrames(p []byte) [][]byte {
 	var frames [][]byte
 	start := 0
-	for i := 0; i < len(p); i++ {
+	for i := range p {
 		if p[i] == '\n' {
 			frames = append(frames, p[start:i+1])
 			start = i + 1
@@ -1705,6 +1705,12 @@ func (h *SamplingHandler) Handle(ctx context.Context, record slog.Record) error 
 			fmt.Fprintf(os.Stderr, "[treasure-slog] SamplingHandler.Handle panic recovered: %v\n", r)
 		}
 	}()
+	// ERROR 及以上不参与采样：故障日志是排障证据，任何情况下都不能丢，
+	// 且不消耗采样计数（不影响 info/debug 的采样密度）。
+	// 采样仅用于抑制 info/debug 等高频日志。
+	if record.Level >= slog.LevelError {
+		return h.handler.Handle(ctx, record)
+	}
 	count := h.count.Add(1)
 	if h.options.Initial > 0 && count <= uint64(h.options.Initial) {
 		return h.handler.Handle(ctx, record)
