@@ -1,28 +1,33 @@
 @echo off
+rem Encoding: GBK (CP936). Keep this file in GBK; saving as UTF-8 breaks parsing on Chinese Windows.
+cd /d "%~dp0"
 
-:: å¯åŠ¨è„šæœ¬ - æ¼”ç¤ºå¦‚ä½•é€šè¿‡ä½ç½®å‚æ•°ä¼ é€’é…ç½®æ–‡ä»¶è·¯å¾„
+:: Æô¶¯½Å±¾ - ÑİÊ¾ÈçºÎÍ¨¹ıÎ»ÖÃ²ÎÊı´«µİÅäÖÃÎÄ¼şÂ·¾¶
 
-:: é»˜è®¤é…ç½®
+:: Ä¬ÈÏÅäÖÃ
 set DEFAULT_CONFIG=configs/tlog.yaml
 
-:: æ˜¾ç¤ºå¸®åŠ©ä¿¡æ¯
-if "%1"=="--help" ( 
-    echo ç”¨æ³•: start.bat [é…ç½®æ–‡ä»¶è·¯å¾„]
-    echo ç¤ºä¾‹:
-    echo   start.bat                    :: ä½¿ç”¨é»˜è®¤é…ç½®æ–‡ä»¶
-    echo   start.bat configs/tlog.dev.yaml :: ä½¿ç”¨å¼€å‘ç¯å¢ƒé…ç½®
-    echo   start.bat configs/tlog.prod.yaml :: ä½¿ç”¨ç”Ÿäº§ç¯å¢ƒé…ç½®
-    echo   start.bat configs/tlog.highperf.yaml :: ä½¿ç”¨é«˜æ€§èƒ½é…ç½®
-    exit /b 0
-)
+:: ÏÔÊ¾°ïÖúĞÅÏ¢
+if "%~1"=="--help" goto help
+if "%~1"=="-h" goto help
 
-:: æ£€æŸ¥æ˜¯å¦æä¾›äº†é…ç½®æ–‡ä»¶è·¯å¾„
-if "%1"=="" ( 
-    echo ä½¿ç”¨é»˜è®¤é…ç½®æ–‡ä»¶: %DEFAULT_CONFIG%
-    go run cmd/main.go
-) else ( 
-    echo ä½¿ç”¨æŒ‡å®šé…ç½®æ–‡ä»¶: %1
-    go run cmd/main.go %1
+:: ¼ì²éÊÇ·ñÌá¹©ÁËÅäÖÃÎÄ¼şÂ·¾¶
+if "%~1"=="" (
+    echo Ê¹ÓÃÄ¬ÈÏÅäÖÃÎÄ¼ş: %DEFAULT_CONFIG%
+    go run cmd/main.go "%DEFAULT_CONFIG%"
+) else (
+    echo Ê¹ÓÃÖ¸¶¨ÅäÖÃÎÄ¼ş: %~1
+    go run cmd/main.go "%~1"
 )
 
 pause
+exit /b 0
+
+:help
+echo ÓÃ·¨: start.bat [ÅäÖÃÎÄ¼şÂ·¾¶]
+echo Ê¾Àı:
+echo   start.bat                    :: Ê¹ÓÃÄ¬ÈÏÅäÖÃÎÄ¼ş
+echo   start.bat configs/tlog.dev.yaml :: Ê¹ÓÃ¿ª·¢»·¾³ÅäÖÃ
+echo   start.bat configs/tlog.prod.yaml :: Ê¹ÓÃÉú²ú»·¾³ÅäÖÃ
+echo   start.bat configs/tlog.highperf.yaml :: Ê¹ÓÃ¸ßĞÔÄÜÅäÖÃ
+exit /b 0

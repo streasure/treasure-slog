@@ -130,6 +130,30 @@ func TestSetDefaults_Sampling(t *testing.T) {
 	}
 }
 
+// 显式 initial: 0 / thereafter: 0 必须保持 0（回归：旧实现把显式 0 强制改写为默认值，
+// 导致 README 承诺的 "thereafter: 0 = 超出后全丢" 配置层不可达）
+func TestSetDefaults_SamplingExplicitZero(t *testing.T) {
+	cfg := loadYAML(t, "log:\n  sampling:\n    enabled: true\n    initial: 0\n    thereafter: 0\n")
+	s := cfg.Log.Sampling
+	if s.Initial != 0 || s.Thereafter != 0 {
+		t.Errorf("显式 0 被改写: initial=%d thereafter=%d, want 0/0", s.Initial, s.Thereafter)
+	}
+	if s.Tick != 1 {
+		t.Errorf("Tick = %d, want 1", s.Tick)
+	}
+}
+
+// 只显式写 thereafter: 0：thereafter 保持 0，initial 缺省仍取 1000
+func TestSetDefaults_SamplingThereafterZeroOnly(t *testing.T) {
+	cfg := loadYAML(t, "log:\n  sampling:\n    enabled: true\n    thereafter: 0\n")
+	if cfg.Log.Sampling.Initial != 1000 {
+		t.Errorf("Initial = %d, want 1000", cfg.Log.Sampling.Initial)
+	}
+	if cfg.Log.Sampling.Thereafter != 0 {
+		t.Errorf("Thereafter = %d, want 0", cfg.Log.Sampling.Thereafter)
+	}
+}
+
 // network timeout/retry 缺省 5/3
 func TestSetDefaults_Network(t *testing.T) {
 	cfg := loadYAML(t, "log:\n  network:\n    enabled: false\n")

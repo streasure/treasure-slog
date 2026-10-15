@@ -71,7 +71,7 @@ func (h *FastHandler) Handle(_ context.Context, r slog.Record) error {
 
 	buf = append(buf, `{"time":"`...)
 	if !r.Time.IsZero() {
-		buf = r.Time.AppendFormat(buf, time.RFC3339Nano)
+		buf = appendRFC3339Nano(buf, r.Time)
 	}
 	buf = append(buf, `","level":"`...)
 	buf = appendLevel(buf, r.Level)
@@ -189,7 +189,7 @@ func appendAttrValue(buf []byte, v slog.Value) []byte {
 		}
 	case slog.KindTime:
 		buf = append(buf, '"')
-		buf = v.Time().AppendFormat(buf, time.RFC3339Nano)
+		buf = appendRFC3339Nano(buf, v.Time())
 		buf = append(buf, '"')
 	case slog.KindDuration:
 		buf = append(buf, '"')
@@ -236,11 +236,89 @@ func appendAttrValue(buf []byte, v slog.Value) []byte {
 	return buf
 }
 
+// jsonEscNeedsEscape 标记需要 JSON 转义的字节（0x00-0x1F 控制字符、"、\）；
+// 其余字节（含 UTF-8 多字节序列）原样拷贝
+var jsonEscNeedsEscape = func() [256]bool {
+	var t [256]bool
+	for c := 0; c < 0x20; c++ {
+		t[c] = true
+	}
+	t['"'] = true
+	t['\\'] = true
+	return t
+}()
+
+// appendRFC3339Nano 手写 RFC3339Nano 格式化（对齐 time.Time.AppendFormat(..., time.RFC3339Nano) 输出），
+// 避开 time layout 解析引擎；等价输出：2006-01-02T15:04:05[.999999999 尾零裁剪][Z|±HH:MM]
+func appendRFC3339Nano(buf []byte, t time.Time) []byte {
+	year, mon, day := t.Date()
+	hour, min, sec := t.Clock()
+	_, off := t.Zone()
+
+	buf = appendDigits4(buf, year)
+	buf = append(buf, '-')
+	buf = appendDigits2(buf, int(mon))
+	buf = append(buf, '-')
+	buf = appendDigits2(buf, day)
+	buf = append(buf, 'T')
+	buf = appendDigits2(buf, hour)
+	buf = append(buf, ':')
+	buf = appendDigits2(buf, min)
+	buf = append(buf, ':')
+	buf = appendDigits2(buf, sec)
+
+	if nsec := t.Nanosecond(); nsec != 0 {
+		buf = append(buf, '.')
+		fracStart := len(buf)
+		buf = appendDigits9(buf, nsec)
+		for len(buf) > fracStart && buf[len(buf)-1] == '0' {
+			buf = buf[:len(buf)-1]
+		}
+	}
+
+	switch {
+	case off == 0:
+		return append(buf, 'Z')
+	case off < 0:
+		buf = append(buf, '-')
+		off = -off
+	default:
+		buf = append(buf, '+')
+	}
+	buf = appendDigits2(buf, off/3600)
+	buf = append(buf, ':')
+	buf = appendDigits2(buf, off%3600/60)
+	return buf
+}
+
+// appendDigits2/4/9 定宽补零数字追加
+func appendDigits2(buf []byte, v int) []byte {
+	return append(buf, byte('0'+v/10%10), byte('0'+v%10))
+}
+
+func appendDigits4(buf []byte, v int) []byte {
+	return append(buf, byte('0'+v/1000%10), byte('0'+v/100%10), byte('0'+v/10%10), byte('0'+v%10))
+}
+
+func appendDigits9(buf []byte, v int) []byte {
+	var b [9]byte
+	for i := 8; i >= 0; i-- {
+		b[i] = byte('0' + v%10)
+		v /= 10
+	}
+	return append(buf, b[:]...)
+}
+
 // appendJSONString 将字符串转义为 JSON 字符串并追加到 buf
+// 热路径优化：无转义字符的连续片段整段拷贝，避免逐字节 append
 func appendJSONString(buf []byte, s string) []byte {
+	start := 0
 	for i := 0; i < len(s); i++ {
-		c := s[i]
-		switch c {
+		if !jsonEscNeedsEscape[s[i]] {
+			continue
+		}
+		buf = append(buf, s[start:i]...)
+		switch c := s[i]; c {
 		case '"':
 			buf = append(buf, `\"`...)
 		case '\\':
@@ -252,15 +330,12 @@ func appendJSONString(buf []byte, s string) []byte {
 		case '\t':
 			buf = append(buf, `\t`...)
 		default:
-			if c < 0x20 {
-				buf = append(buf, `\u`...)
-				buf = appendHexUint16(buf, uint16(c))
-			} else {
-				buf = append(buf, c)
-			}
+			buf = append(buf, `\u`...)
+			buf = appendHexUint16(buf, uint16(c))
 		}
+		start = i + 1
 	}
-	return buf
+	return append(buf, s[start:]...)
 }
 
 // appendHexUint16 追加 16 位无符号整数的十六进制表示

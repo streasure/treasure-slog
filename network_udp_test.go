@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/streasure/treasure-slog/internal/config"
+	"github.com/streasure/treasure-slog/config"
 )
 
 // TestNetworkWriter_UDPLineFraming 验证 UDP 按行分帧：

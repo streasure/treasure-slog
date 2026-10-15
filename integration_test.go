@@ -52,9 +52,9 @@ func TestAllFeatures(t *testing.T) {
 	t.Log("=== Testing hook chain ===")
 	hookCalled := false
 	testHook := &TestHookImpl{
-		OnRun: func(msg string, level string, args ...any) {
+		OnBefore: func(e *Event) {
 			hookCalled = true
-			t.Logf("Hook called with msg: %s, level: %s, args: %v", msg, level, args)
+			t.Logf("Hook called with msg: %s, level: %s, attrs: %v", e.Message, e.Level, e.Attrs)
 		},
 	}
 

@@ -365,7 +365,7 @@ func TestPanicRobustness(t *testing.T) {
 				}
 				defer logger.Sync()
 				panicHook := &TestHookImpl{
-					OnRun: func(msg string, level string, args ...any) {
+					OnBefore: func(e *Event) {
 						panic("intentional hook panic")
 					},
 				}
@@ -388,17 +388,17 @@ func TestPanicRobustness(t *testing.T) {
 				}
 				defer logger.Sync()
 				panicHook1 := &TestHookImpl{
-					OnRun: func(msg string, level string, args ...any) {
+					OnBefore: func(e *Event) {
 						panic("hook1 panic")
 					},
 				}
 				normalHook := &TestHookImpl{
-					OnRun: func(msg string, level string, args ...any) {
+					OnBefore: func(e *Event) {
 						// 正常hook
 					},
 				}
 				panicHook2 := &TestHookImpl{
-					OnRun: func(msg string, level string, args ...any) {
+					OnBefore: func(e *Event) {
 						panic("hook2 panic")
 					},
 				}

@@ -53,6 +53,7 @@ func main() {
 
 	// 4. 动态调整日志级别
 	fmt.Println("4. 动态调整日志级别")
+	logger.SetLevel("info") // 演示用：先切到 info（默认配置 tlog.yaml 为 debug）
 	fmt.Printf("当前日志级别: %s\n", logger.GetLevel())
 
 	logger.Debug(ctx, "这条 debug 日志不会显示（当前级别 info）")
@@ -61,7 +62,7 @@ func main() {
 	fmt.Printf("调整后级别: %s\n", logger.GetLevel())
 	logger.Debug(ctx, "现在这条 debug 日志会显示了")
 
-	logger.SetLevel("info") // 恢复
+	logger.SetLevel("debug") // 恢复配置默认级别（tlog.yaml: level: debug）
 	fmt.Println()
 
 	// 5. Hook 机制
@@ -76,8 +77,15 @@ func main() {
 
 	// 6. Panic 恢复
 	fmt.Println("6. Panic 恢复示例")
-	riskyOperation()
-	fmt.Println("程序继续执行（Panic 被捕获）")
+	// Recover() 记录日志后会重新抛出 panic，这里在最外层边界拦截
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Printf("panic 已在边界拦截: %v\n", r)
+			}
+		}()
+		riskyOperation()
+	}()
 
 	// 等待异步日志写入完成
 	time.Sleep(100 * time.Millisecond)
@@ -88,17 +96,19 @@ func main() {
 	fmt.Println("=== 示例结束 ===")
 }
 
-// MetricsHook 自定义 Hook 示例
+// MetricsHook 自定义 Hook 示例：仅对通过采样、实际写入的日志按级别计数
+// 嵌入 HookFuncs 适配器，只需实现关心的方法（此处仅 BeforeWrite）
 type MetricsHook struct {
+	logger.HookFuncs
 	counter map[string]int
 }
 
-func (h *MetricsHook) Run(msg string, level string, args ...any) {
-	h.counter[level]++
+func (h *MetricsHook) BeforeWrite(e *logger.Event) {
+	h.counter[e.Level.String()]++
 }
 
-// riskyOperation 可能触发 panic 的操作
+// riskyOperation 演示 Recover：记录 panic 日志后重新抛出，由调用方边界拦截
 func riskyOperation() {
-	defer logger.Recover() // 自动捕获 panic 并记录
+	defer logger.Recover() // 记录 panic 日志后重新抛出
 	panic("模拟的 panic 错误")
 }

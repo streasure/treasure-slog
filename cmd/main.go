@@ -12,6 +12,11 @@ import (
 func main() {
 	// 显式初始化全局 logger（首次 New 调用会设置全局实例）
 	// 配置路径：默认 configs/tlog.yaml，可通过第一个位置参数指定
+	if len(os.Args) > 1 && (os.Args[1] == "--help" || os.Args[1] == "-h") {
+		fmt.Println("用法: go run ./cmd [配置文件路径]")
+		fmt.Println("默认配置: configs/tlog.yaml")
+		return
+	}
 	configPath := "configs/tlog.yaml"
 	if len(os.Args) > 1 {
 		configPath = os.Args[1]
@@ -42,14 +47,15 @@ func main() {
 
 	// 动态调整日志级别
 	fmt.Println("3. 动态调整日志级别")
+	logger.SetLevel("info") // 演示用：先切到 info（默认配置 tlog.yaml 为 debug）
 	fmt.Printf("当前日志级别: %s\n", logger.GetLevel())
-	logger.Debug(ctx, "这条 debug 日志不会显示")
+	logger.Debug(ctx, "这条 debug 日志不会显示（当前级别 info）")
 
 	logger.SetLevel("debug")
 	fmt.Printf("调整后级别: %s\n", logger.GetLevel())
 	logger.Debug(ctx, "现在这条 debug 日志会显示了")
 
-	logger.SetLevel("info") // 恢复默认级别
+	logger.SetLevel("debug") // 恢复配置默认级别（tlog.yaml: level: debug）
 	fmt.Println()
 
 	// 测试性能
@@ -65,8 +71,15 @@ func main() {
 
 	// 测试 Panic 恢复
 	fmt.Println("5. Panic 恢复测试")
-	testPanic()
-	fmt.Println("程序继续执行（Panic 被捕获）")
+	// Recover() 记录日志后会重新抛出 panic，生产代码应在进程边界自行 recover（或让进程崩溃退出）
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Printf("panic 已在边界拦截: %v\n", r)
+			}
+		}()
+		testPanic()
+	}()
 	fmt.Println()
 
 	// 等待异步日志写入完成
@@ -78,7 +91,7 @@ func main() {
 	fmt.Println("=== 示例结束 ===")
 }
 
-// testPanic 测试 Panic 恢复
+// testPanic 演示 Recover：记录 panic 日志后重新抛出，由调用方边界拦截
 func testPanic() {
 	defer logger.Recover()
 	panic("模拟的 panic 错误")

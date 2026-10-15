@@ -20,14 +20,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/streasure/treasure-slog/internal/config"
+	"github.com/streasure/treasure-slog/config"
 	"github.com/streasure/treasure-slog/internal/writer"
 )
 
-// Hook 定义日志钩子接口
-type Hook interface {
-	Run(msg string, level string, args ...any)
-}
+// Hook 插件接口定义见 extensibility.go（BeforeWrite/AfterWrite + Event）
 
 // Logger 接口定义日志方法
 type Logger interface {
@@ -188,9 +185,9 @@ type logEntry struct {
 	level   slog.Level
 	ctx     context.Context
 	args    []any
-	hooks   []Hook
 	handler slog.Handler // 捕获创建时的 handler，异步 worker 使用派生 handler 而非 base handler
 	ts      time.Time    // 日志时间戳（避免 slog 内部再次调用 time.Now）
+	preKeys []string     // 生产者捕获的预注入属性 key（异步 worker 构建 record 时去重）
 }
 
 func (e *logEntry) Reset() {
@@ -198,9 +195,9 @@ func (e *logEntry) Reset() {
 	e.level = 0
 	e.msg = ""
 	e.args = nil
-	e.hooks = nil
 	e.handler = nil
 	e.ts = time.Time{}
+	e.preKeys = nil
 }
 
 // --- ringBuffer 分片环形缓冲区 ---
@@ -597,24 +594,30 @@ func (hw *httpWriter) Close() error {
 // --- SLogger ---
 
 type SLogger struct {
-	logger        *slog.Logger
-	handler       slog.Handler // 缓存：避免每次 log 都调 l.logger.Handler()
-	hooks         []Hook
-	fileLogger    *writer.FileWriter
-	level         *atomic.Int32  // 指针：With/WithContext 派生 logger 共享同一级别
-	levelVar      *slog.LevelVar // 指针：TextHandler 动态级别共享
-	ringBuf       *ringBuffer
-	batchWriter   *batchWriter
-	consoleWriter *batchWriter // 控制台独立 batchWriter（当 console.format != log.format 时使用）
-	networkWriter io.WriteCloser
-	cfg           *config.Config
-	workers       []*worker
-	wg            *sync.WaitGroup
-	usePool       bool
-	asyncEnabled  *atomic.Bool // 是否启用异步模式；共享指针，Sync 后派生 logger 一并转同步
-	lockFree      bool         // 是否启用无锁优化
-	prealloc      bool         // 是否启用预分配
-	syncOnce      *sync.Once   // 指针：With/WithContext/AddHook 派生 logger 共享同一个 Once，保证 Sync 不会双重关闭
+	logger          *slog.Logger
+	handler         slog.Handler                      // 缓存：避免每次 log 都调 l.logger.Handler()
+	hooks           []Hook                            // Hook 插件（经 handler 链 hooksHandler 执行，非直接遍历）
+	outputHandler   slog.Handler                      // 输出链（coreDecos + 扇出，未包 hooks/采样/错误处理），AddHook 重建用
+	withArgs        []any                             // With/WithContext 注入的属性对，AddHook 重建时重放
+	errHandler      func(error)                       // 写错误处理；nil = 默认打印 stderr
+	pipelineDecos   []func(slog.Handler) slog.Handler // 管线级装饰器（采样之前），AddHook 重建用
+	fileLogger      *writer.FileWriter
+	level           *atomic.Int32  // 指针：With/WithContext 派生 logger 共享同一级别
+	levelVar        *slog.LevelVar // 指针：TextHandler 动态级别共享
+	ringBuf         *ringBuffer
+	batchWriter     *batchWriter
+	consoleWriter   *batchWriter // 控制台独立 batchWriter（当 console.format != log.format 时使用）
+	networkWriter   io.WriteCloser
+	cfg             *config.Config
+	workers         []*worker
+	wg              *sync.WaitGroup
+	usePool         bool
+	asyncEnabled    *atomic.Bool     // 是否启用异步模式；共享指针，Sync 后派生 logger 一并转同步
+	lockFree        bool             // 是否启用无锁优化
+	prealloc        bool             // 是否启用预分配
+	syncOnce        *sync.Once       // 指针：With/WithContext/AddHook 派生 logger 共享同一个 Once，保证 Sync 不会双重关闭
+	preAttrKeys     []string         // 派生 logger（With/WithContext）预注入的属性 key，用于 context 提取去重（派生后不可变，可安全共享）
+	samplingHandler *SamplingHandler // 采样 handler（未启用时为 nil），用于 SamplingStats
 }
 
 // newAtomicBool 构造 *atomic.Bool
@@ -796,26 +799,47 @@ func isTempDir(dir string) bool {
 // 路径约定：configPath 按调用方传入的原样使用；
 // log.file.path 若为相对路径则基于进程工作目录（调用工程所在目录）解析。
 // 工作目录缺失或位于系统临时目录时直接报错
-func New(configPath string) (*SLogger, error) {
+// New 从配置文件路径构建 logger，可变参数 Option 提供代码级扩展（自定义输出/装饰器/Hook 等）
+func New(configPath string, opts ...Option) (*SLogger, error) {
 	cfg, err := config.LoadConfig(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("load config error: %w", err)
 	}
+	return NewFromConfig(cfg, opts...)
+}
 
-	// async.enabled 由 config.setDefaults 处理默认值
+// NewFromConfig 从内存 Config 构建 logger（程序化构造时先调用 cfg.ApplyDefaults()，
+// 本方法会自动补调）；cfg 为 nil 时等价于全默认配置。扩展方式与 New 相同。
+// 首个成功构建的实例成为包级全局 logger（与 New 一致）。
+func NewFromConfig(cfg *config.Config, opts ...Option) (*SLogger, error) {
+	if cfg == nil {
+		cfg = &config.Config{}
+	}
+	cfg.ApplyDefaults()
+
+	var o sloggerOptions
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&o)
+		}
+	}
+
+	// async.enabled 由 ApplyDefaults 处理默认值
 	asyncEnabled := cfg.Log.Async.Enabled
 
 	slogger := &SLogger{
-		cfg:          cfg,
-		hooks:        []Hook{},
-		wg:           &sync.WaitGroup{},
-		usePool:      cfg.Log.Performance.UsePool,
-		asyncEnabled: newAtomicBool(asyncEnabled),
-		lockFree:     cfg.Log.Performance.LockFree,
-		prealloc:     cfg.Log.Performance.Prealloc,
-		level:        &atomic.Int32{},
-		levelVar:     &slog.LevelVar{},
-		syncOnce:     &sync.Once{},
+		cfg:           cfg,
+		hooks:         o.hooks,
+		errHandler:    o.errHandler,
+		pipelineDecos: o.pipelineDecos,
+		wg:            &sync.WaitGroup{},
+		usePool:       cfg.Log.Performance.UsePool,
+		asyncEnabled:  newAtomicBool(asyncEnabled),
+		lockFree:      cfg.Log.Performance.LockFree,
+		prealloc:      cfg.Log.Performance.Prealloc,
+		level:         &atomic.Int32{},
+		levelVar:      &slog.LevelVar{},
+		syncOnce:      &sync.Once{},
 	}
 
 	slogger.SetLevel(cfg.Log.Level)
@@ -862,6 +886,7 @@ func New(configPath string) (*SLogger, error) {
 				time.Duration(cfg.Log.Network.Timeout)*time.Second,
 				cfg.Log.Network.Retry)
 		} else {
+			var err error
 			nw, err = newNetworkWriter(cfg.Log.Network)
 			if err != nil {
 				return nil, fmt.Errorf("create network writer error: %w", err)
@@ -869,6 +894,10 @@ func New(configPath string) (*SLogger, error) {
 		}
 		slogger.networkWriter = nw
 		writers = append(writers, nw)
+	}
+	// Option 注入的自定义输出：与配置输出并行写入
+	for _, ow := range o.writers {
+		writers = append(writers, ow)
 	}
 
 	var writer io.Writer
@@ -887,29 +916,33 @@ func New(configPath string) (*SLogger, error) {
 		writer = slogger.batchWriter
 	}
 
-	handler := slogger.createHandler(writer)
+	// 输出级装饰器：包在主输出 handler 外侧（扇出、采样、Hook 之前）
+	outputHandler := slogger.createHandler(writer)
+	for i := len(o.coreDecos) - 1; i >= 0; i-- {
+		outputHandler = o.coreDecos[i](outputHandler)
+	}
 
 	// 控制台独立格式：当 console.format 与 log.format 不同时，创建独立控制台 handler
 	if consoleIndependent {
 		cw := newBatchWriter(os.Stdout, cfg.Log.Async.BatchSize,
 			time.Duration(cfg.Log.Async.FlushInterval)*time.Millisecond)
 		consoleHandler := slogger.createConsoleHandler(cw, consoleFormat)
-		handler = slog.NewMultiHandler(handler, consoleHandler)
+		outputHandler = slog.NewMultiHandler(outputHandler, consoleHandler)
 		slogger.consoleWriter = cw
 	}
+	slogger.outputHandler = outputHandler
 
 	// 采样在扇出之后统一包裹：文件与控制台共享同一采样计数，同一日志的去留决策一致
 	if cfg.Log.Sampling.Enabled {
-		handler = NewSamplingHandler(handler, SamplingOptions{
+		slogger.samplingHandler = NewSamplingHandler(nil, SamplingOptions{
 			Initial:    cfg.Log.Sampling.Initial,
 			Thereafter: cfg.Log.Sampling.Thereafter,
 			Tick:       time.Duration(cfg.Log.Sampling.Tick) * time.Second,
 		})
 	}
 
-	// 写错误统一打到 stderr，避免静默丢弃（含 Sync 之后对已关闭 writer 的写入）
-	handler = newStderrLoggingHandler(handler)
-
+	// 组装完整处理链：输出 → Hook → 采样 → 写错误 → 管线级装饰
+	handler := slogger.composeHandler()
 	slogger.logger = slog.New(handler)
 	slogger.handler = handler // 缓存 handler，processEntry 可直接调用
 
@@ -997,35 +1030,83 @@ func (l *SLogger) createConsoleHandler(writer io.Writer, format string) slog.Han
 	}
 }
 
-// --- stderrLoggingHandler ---
+// --- 处理链组装 ---
 
-// stderrLoggingHandler 包装下层 handler，把 Handle 返回的写错误输出到 stderr。
-// 与 slog.NewMultiHandler（Go 1.26 标准库）组合：stdlib 版本会把多个 handler 的
-// 错误用 errors.Join 聚合后返回，而本库热路径忽略返回值，这里保持原先“写错误打到
-// stderr、不向上冒泡”的行为，避免错误被静默丢弃。
-type stderrLoggingHandler struct {
-	slog.Handler
-}
-
-func newStderrLoggingHandler(h slog.Handler) slog.Handler {
-	return &stderrLoggingHandler{Handler: h}
-}
-
-func (h *stderrLoggingHandler) Handle(ctx context.Context, r slog.Record) error {
-	if err := h.Handler.Handle(ctx, r); err != nil {
-		fmt.Fprintf(os.Stderr, "[treasure-slog] handler error: %v\n", err)
+// composeHandler 从输出链组装完整处理链：输出 → Hook → 采样 → 写错误 → 管线级装饰。
+// New/NewFromConfig 与 AddHook 重建共用，保证链结构一致。
+// 采样在 Hook 外侧：Hook 仅对通过采样的日志触发；写错误处理在采样外侧，覆盖全部写出路径。
+func (l *SLogger) composeHandler() slog.Handler {
+	h := l.outputHandler
+	if h == nil {
+		// 手动构造的 SLogger（测试/嵌入场景）：以当前 handler 为输出链
+		h = l.handler
 	}
-	return nil
+	if h == nil {
+		return nil
+	}
+	// Hook 先于 WithAttrs 包裹：hooksHandler.WithAttrs 会累积预注入属性供 Event 展示
+	h = newHooksHandler(h, l.hooks)
+	if len(l.withArgs) > 0 {
+		h = h.WithAttrs(argsToAttrs(l.withArgs))
+	}
+	if l.samplingHandler != nil {
+		h = l.samplingHandler.withNext(h)
+	}
+	// 写错误统一处理，避免静默丢弃（含 Sync 之后对已关闭 writer 的写入）
+	h = newWriteErrorHandler(h, l.errHandler)
+	for i := len(l.pipelineDecos) - 1; i >= 0; i-- {
+		if l.pipelineDecos[i] != nil {
+			h = l.pipelineDecos[i](h)
+		}
+	}
+	return h
 }
 
-// WithAttrs/WithGroup 显式覆盖嵌入提升的方法，保证派生 handler（如 logger.With）
-// 仍然带 stderr 错误输出包装
-func (h *stderrLoggingHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return &stderrLoggingHandler{Handler: h.Handler.WithAttrs(attrs)}
+// cloneShared 复制派生 logger 所需的共享字段（handler/logger 供 rebuild 前回退/过渡使用，
+// rebuild 成功后会被替换）
+func (l *SLogger) cloneShared() *SLogger {
+	return &SLogger{
+		logger:          l.logger,
+		handler:         l.handler,
+		outputHandler:   l.outputHandler,
+		errHandler:      l.errHandler,
+		pipelineDecos:   l.pipelineDecos,
+		fileLogger:      l.fileLogger,
+		level:           l.level,
+		levelVar:        l.levelVar,
+		ringBuf:         l.ringBuf,
+		batchWriter:     l.batchWriter,
+		consoleWriter:   l.consoleWriter,
+		networkWriter:   l.networkWriter,
+		cfg:             l.cfg,
+		workers:         l.workers,
+		wg:              l.wg,
+		usePool:         l.usePool,
+		asyncEnabled:    l.asyncEnabled,
+		lockFree:        l.lockFree,
+		prealloc:        l.prealloc,
+		syncOnce:        l.syncOnce, // 共享同一个 Once，保证 Sync 不会双重关闭
+		preAttrKeys:     l.preAttrKeys,
+		samplingHandler: l.samplingHandler,
+	}
 }
 
-func (h *stderrLoggingHandler) WithGroup(name string) slog.Handler {
-	return &stderrLoggingHandler{Handler: h.Handler.WithGroup(name)}
+// rebuild 从 outputHandler + withArgs + hooks 重建完整处理链（AddHook 用）
+func (l *SLogger) rebuild() {
+	h := l.composeHandler()
+	if h == nil {
+		return
+	}
+	l.handler = h
+	l.logger = slog.New(h)
+}
+
+// Handler 返回当前完整处理链（含装饰/Hook/采样/错误处理包装），供外部复用或测试
+func (l *SLogger) Handler() slog.Handler {
+	if l == nil {
+		return nil
+	}
+	return l.handler
 }
 
 // --- 核心日志方法 ---
@@ -1039,6 +1120,20 @@ func safeArgs(args []any) []any {
 		return newArgs
 	}
 	return args
+}
+
+// argsToAttrs 将 key-value 对转换为 []slog.Attr（AddHook 重建链时重放 withArgs）
+func argsToAttrs(args []any) []slog.Attr {
+	args = safeArgs(args)
+	attrs := make([]slog.Attr, 0, len(args)/2)
+	for i := 0; i+1 < len(args); i += 2 {
+		if k, ok := args[i].(string); ok {
+			attrs = append(attrs, slog.Any(k, args[i+1]))
+		} else {
+			attrs = append(attrs, slog.Any(fmt.Sprint(args[i]), args[i+1]))
+		}
+	}
+	return attrs
 }
 
 func (l *SLogger) log(ctx context.Context, level slog.Level, msg string, args ...any) {
@@ -1100,7 +1195,8 @@ func (l *SLogger) log(ctx context.Context, level slog.Level, msg string, args ..
 	entry.msg = msg
 	entry.level = level
 	entry.ctx = ctx
-	entry.handler = l.handler // 捕获派生 handler，异步 worker 使用
+	entry.handler = l.handler     // 捕获派生 handler，异步 worker 使用
+	entry.preKeys = l.preAttrKeys // 捕获预注入 key，worker 构建 record 时去重
 	// 内联 safeArgs：偶数参数直接赋值（避免函数调用开销与堆分配）
 	// 必须拷贝：异步模式下 worker 消费时调用方可能已复用底层数组
 	if len(args)%2 == 0 {
@@ -1108,7 +1204,6 @@ func (l *SLogger) log(ctx context.Context, level slog.Level, msg string, args ..
 	} else {
 		entry.args = safeArgs(args)
 	}
-	entry.hooks = l.hooks
 	entry.ts = time.Now() // 生产者设置时间戳，worker 直接使用避免重复调用
 
 	pushed := l.ringBuf.Push(entry)
@@ -1137,29 +1232,12 @@ func (l *SLogger) processEntryDirect(ctx context.Context, level slog.Level, msg 
 		}
 	}()
 
-	// 执行钩子
-	endHook := timing.startTimer(&timing.hookExecNS)
-	for _, hook := range l.hooks {
-		if hook == nil {
-			continue
-		}
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					fmt.Fprintf(os.Stderr, "[treasure-slog] hook panic recovered: %v\n", r)
-				}
-			}()
-			levelStr := safeLevelString(level)
-			hook.Run(msg, levelStr, args...)
-		}()
-	}
-	endHook()
-
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
-	safeArgsVal := safeArgs(args)
+	// 去重：已作为预存属性（With/WithContext）注入的 key 不再重复写入 record
+	safeArgsVal := dropPreKeys(safeArgs(args), l.preAttrKeys)
 
 	// 根据 stacktrace.level 配置追加堆栈
 	if l.cfg != nil && l.cfg.Log.Stacktrace.Enabled && l.shouldAddStacktrace(level) {
@@ -1223,24 +1301,6 @@ func (l *SLogger) processEntry(entry *logEntry) {
 		}
 	}()
 
-	// 执行钩子
-	endHook := timing.startTimer(&timing.hookExecNS)
-	for _, hook := range entry.hooks {
-		if hook == nil {
-			continue
-		}
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					fmt.Fprintf(os.Stderr, "[treasure-slog] hook panic recovered: %v\n", r)
-				}
-			}()
-			levelStr := safeLevelString(entry.level)
-			hook.Run(entry.msg, levelStr, entry.args...)
-		}()
-	}
-	endHook()
-
 	ctx := entry.ctx
 	if ctx == nil {
 		ctx = context.Background()
@@ -1250,6 +1310,8 @@ func (l *SLogger) processEntry(entry *logEntry) {
 	if len(args)%2 != 0 {
 		args = safeArgs(args)
 	}
+	// 去重：已作为预存属性注入的 key 不再重复写入 record
+	args = dropPreKeys(args, entry.preKeys)
 
 	// 根据 stacktrace.level 配置追加堆栈
 	if l.cfg != nil && l.cfg.Log.Stacktrace.Enabled && l.shouldAddStacktrace(entry.level) {
@@ -1277,22 +1339,6 @@ func (l *SLogger) processEntry(entry *logEntry) {
 		_ = l.logger.Handler().Handle(ctx, record)
 	}
 	endSlogCall()
-}
-
-// safeLevelString 安全获取level字符串
-func safeLevelString(level slog.Level) string {
-	switch level {
-	case slog.LevelDebug:
-		return "DEBUG"
-	case slog.LevelInfo:
-		return "INFO"
-	case slog.LevelWarn:
-		return "WARN"
-	case slog.LevelError:
-		return "ERROR"
-	default:
-		return fmt.Sprintf("LEVEL(%d)", int(level))
-	}
 }
 
 // --- 公开方法 ---
@@ -1330,8 +1376,13 @@ func (l *SLogger) logf(ctx context.Context, level slog.Level, format string, arg
 		return
 	}
 
-	// 格式化消息
-	msg := fmt.Sprintf(format, args...)
+	// 格式化消息：无 % 动词时直接复用 format，跳过 fmt.Sprintf（避免整串拷贝分配）
+	var msg string
+	if strings.IndexByte(format, '%') >= 0 {
+		msg = fmt.Sprintf(format, args...)
+	} else {
+		msg = format
+	}
 
 	// 提取 context 中的 trace 信息，作为额外字段添加到日志
 	var contextArgs []any
@@ -1355,28 +1406,11 @@ func (l *SLogger) withContext(ctx context.Context) *SLogger {
 		return l
 	}
 
-	// 直接分配（不能用 sync.Pool：derived logger 生命周期由调用方管理，无法回收）
-	newLogger := &SLogger{}
-
-	// 复用基础字段（共享，不需要拷贝）
-	newLogger.logger = l.logger
-	newLogger.handler = l.handler
+	// 复用共享字段（不能用 sync.Pool：derived logger 生命周期由调用方管理，无法回收）
+	newLogger := l.cloneShared()
 	newLogger.hooks = l.hooks
-	newLogger.fileLogger = l.fileLogger
-	newLogger.level = l.level
-	newLogger.levelVar = l.levelVar
-	newLogger.ringBuf = l.ringBuf
-	newLogger.batchWriter = l.batchWriter
-	newLogger.consoleWriter = l.consoleWriter
-	newLogger.networkWriter = l.networkWriter
-	newLogger.cfg = l.cfg
-	newLogger.workers = l.workers
-	newLogger.wg = l.wg
-	newLogger.usePool = l.usePool
-	newLogger.asyncEnabled = l.asyncEnabled
-	newLogger.lockFree = l.lockFree
-	newLogger.prealloc = l.prealloc
-	newLogger.syncOnce = l.syncOnce // 共享同一个 Once，保证 Sync 不会双重关闭
+	newLogger.withArgs = appendWithArgs(l.withArgs, args...)
+	newLogger.preAttrKeys = mergePreKeys(l.preAttrKeys, args...)
 
 	// 添加 context 字段
 	slogLogger := l.logger.With(safeArgs(args)...)
@@ -1386,34 +1420,31 @@ func (l *SLogger) withContext(ctx context.Context) *SLogger {
 	return newLogger
 }
 
+// appendWithArgs 拷贝安全地追加属性对：共享底层数组时先复制，避免兄弟派生 logger 互相覆盖
+func appendWithArgs(base []any, pairs ...any) []any {
+	if len(pairs) == 0 {
+		return base
+	}
+	out := make([]any, len(base), len(base)+len(pairs))
+	copy(out, base)
+	return append(out, pairs...)
+}
+
 func (l *SLogger) With(args ...any) Logger {
 	if l == nil || l.logger == nil {
 		return l
 	}
 
 	// 直接分配（不能用 sync.Pool：derived logger 生命周期由调用方管理，无法回收）
-	newLogger := &SLogger{}
+	newLogger := l.cloneShared()
+	newLogger.hooks = l.hooks
+	newLogger.withArgs = appendWithArgs(l.withArgs, args...)
+	newLogger.preAttrKeys = mergePreKeys(l.preAttrKeys, args...)
 
 	// 添加字段
 	slogLogger := l.logger.With(safeArgs(args)...)
 	newLogger.logger = slogLogger
 	newLogger.handler = slogLogger.Handler()
-	newLogger.hooks = l.hooks
-	newLogger.fileLogger = l.fileLogger
-	newLogger.level = l.level
-	newLogger.levelVar = l.levelVar
-	newLogger.ringBuf = l.ringBuf
-	newLogger.batchWriter = l.batchWriter
-	newLogger.consoleWriter = l.consoleWriter
-	newLogger.networkWriter = l.networkWriter
-	newLogger.cfg = l.cfg
-	newLogger.workers = l.workers
-	newLogger.wg = l.wg
-	newLogger.usePool = l.usePool
-	newLogger.asyncEnabled = l.asyncEnabled
-	newLogger.lockFree = l.lockFree
-	newLogger.prealloc = l.prealloc
-	newLogger.syncOnce = l.syncOnce // 共享同一个 Once，保证 Sync 不会双重关闭
 
 	return newLogger
 }
@@ -1422,13 +1453,25 @@ func (l *SLogger) WithContext(ctx context.Context) Logger {
 	return l.withContext(ctx)
 }
 
+// SamplingStats 返回采样决策统计 (sampled, dropped)；未启用采样或 l 为 nil 时返回 0, 0
+func (l *SLogger) SamplingStats() (sampled, dropped uint64) {
+	if l == nil || l.samplingHandler == nil {
+		return 0, 0
+	}
+	return l.samplingHandler.Sampled(), l.samplingHandler.Dropped()
+}
+
 func extractContextInfo(ctx context.Context) []any {
-	if ctx == nil {
+	if ctx == nil || ctx == context.Background() {
 		return nil
 	}
-	args := make([]any, 0, 8)
+	// 懒分配：无匹配 key 时零分配（热路径 ctx 通常无追踪字段）
+	var args []any
 	for _, ck := range contextKeys {
 		if v := ctx.Value(ck.key); v != nil {
+			if args == nil {
+				args = make([]any, 0, len(contextKeys)*2)
+			}
 			args = append(args, ck.name, v)
 		}
 	}
@@ -1437,6 +1480,53 @@ func extractContextInfo(ctx context.Context) []any {
 
 // contextKey 用于 context value 的类型安全 key，避免裸字符串碰撞
 type contextKey struct{ name string }
+
+// mergePreKeys 合并已预注入的属性 key（仅收集 string key）；无可收集 key 时直接返回 base（零分配）
+func mergePreKeys(base []string, pairs ...any) []string {
+	var keys []string
+	for i := 0; i < len(pairs); i += 2 {
+		if k, ok := pairs[i].(string); ok {
+			if keys == nil {
+				keys = make([]string, 0, len(base)+len(pairs)/2)
+				keys = append(keys, base...)
+			}
+			keys = append(keys, k)
+		}
+	}
+	if keys == nil {
+		return base
+	}
+	return keys
+}
+
+// dropPreKeys 过滤掉已作为预存属性注入的 key（同一 key 至多输出一次），就地修改 args；
+// 仅在派生 logger（pre 非空）上有开销，基础 logger 直接返回
+func dropPreKeys(args []any, pre []string) []any {
+	if len(pre) == 0 || len(args) < 2 {
+		return args
+	}
+	w := 0
+	for i := 0; i+1 < len(args); i += 2 {
+		if k, ok := args[i].(string); ok {
+			skip := false
+			for _, pk := range pre {
+				if pk == k {
+					skip = true
+					break
+				}
+			}
+			if skip {
+				continue
+			}
+		}
+		if w != i {
+			args[w] = args[i]
+			args[w+1] = args[i+1]
+		}
+		w += 2
+	}
+	return args[:w]
+}
 
 // 内置 context key 常量
 var (
@@ -1457,6 +1547,8 @@ var contextKeys = []struct {
 	{ContextKeyTraceID, "trace_id"},
 }
 
+// AddHook 追加 Hook 插件并重建处理链（Hook 插入采样内侧：仅通过采样的日志触发）。
+// 返回新的派生 logger，共享异步缓冲/级别等资源；原 logger 不受影响。
 func (l *SLogger) AddHook(hook Hook) Logger {
 	if l == nil {
 		return l
@@ -1464,29 +1556,13 @@ func (l *SLogger) AddHook(hook Hook) Logger {
 	if hook == nil {
 		return l // 忽略 nil hook，避免后续遍历无意义
 	}
-	newHooks := make([]Hook, len(l.hooks)+1)
-	copy(newHooks, l.hooks)
-	newHooks[len(l.hooks)] = hook
-	return &SLogger{
-		logger:        l.logger,
-		handler:       l.handler,
-		hooks:         newHooks,
-		fileLogger:    l.fileLogger,
-		level:         l.level,
-		levelVar:      l.levelVar,
-		ringBuf:       l.ringBuf,
-		batchWriter:   l.batchWriter,
-		consoleWriter: l.consoleWriter,
-		networkWriter: l.networkWriter,
-		cfg:           l.cfg,
-		workers:       l.workers,
-		wg:            l.wg,
-		usePool:       l.usePool,
-		asyncEnabled:  l.asyncEnabled,
-		lockFree:      l.lockFree,
-		prealloc:      l.prealloc,
-		syncOnce:      l.syncOnce, // 共享同一个 Once，保证 Sync 不会双重关闭
-	}
+	newLogger := l.cloneShared()
+	newLogger.hooks = make([]Hook, len(l.hooks)+1)
+	copy(newLogger.hooks, l.hooks)
+	newLogger.hooks[len(l.hooks)] = hook
+	newLogger.withArgs = l.withArgs
+	newLogger.rebuild()
+	return newLogger
 }
 
 func (l *SLogger) SetLevel(level string) {
@@ -1661,6 +1737,14 @@ func GetLevel() string {
 	}
 	return ""
 }
+
+// SamplingStats 返回全局 logger 的采样决策统计 (sampled, dropped)；未启用采样时返回 0, 0
+func SamplingStats() (sampled, dropped uint64) {
+	if s, ok := globalLogger.(*SLogger); ok {
+		return s.SamplingStats()
+	}
+	return 0, 0
+}
 func Recover() {
 	if r := recover(); r != nil {
 		stackTrace := getStackTrace(10)
@@ -1758,6 +1842,19 @@ func NewSamplingHandler(handler slog.Handler, options SamplingOptions) *Sampling
 		options:  options,
 		counters: &samplingCounters{},
 		stats:    &samplingStats{},
+	}
+}
+
+// withNext 返回包装新内层 handler 的采样实例，共享计数器与统计（AddHook 重建链用）
+func (h *SamplingHandler) withNext(next slog.Handler) *SamplingHandler {
+	if h == nil {
+		return nil
+	}
+	return &SamplingHandler{
+		handler:  next,
+		options:  h.options,
+		counters: h.counters,
+		stats:    h.stats,
 	}
 }
 

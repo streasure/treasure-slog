@@ -29,20 +29,20 @@ type LogConfig struct {
 // AsyncConfig 异步写入配置，将日志写入与业务逻辑解耦，提升吞吐量
 type AsyncConfig struct {
 	Enabled          bool `yaml:"enabled"`           // 是否启用异步写入；YAML 中缺省该键时默认启用，显式 false 为同步模式
-	BufferSize       int  `yaml:"buffer_size"`       // 异步缓冲区大小（条数），积压超过此值时新日志可能被丢弃，默认 10000
+	BufferSize       int  `yaml:"buffer_size"`       // 环形缓冲区总容量（条，按 worker 分片均分），缓冲满时降级为同步写入（不丢日志），默认 10000
 	BatchSize        int  `yaml:"batch_size"`        // 批量阈值双重语义：worker 单批条数 + batchWriter 刷盘字节阈值（KB），默认 100
 	FlushInterval    int  `yaml:"flush_interval"`    // 批量刷盘超时（毫秒），即使没攒够 batch_size 也在此时间后强制写入，默认 100
 	WorkerMultiplier int  `yaml:"worker_multiplier"` // 异步 worker 数 = CPU 核数 × 此倍数，默认 1
 	Workers          int  `yaml:"-"`                 // 内部计算字段：实际 worker 数，限制在 1~32 之间，不由用户直接配置
-	enabledSet       bool // enabled 键是否在 YAML 中显式出现（区分缺省与写 false），由 UnmarshalYAML 设置
+	EnabledSet       bool `yaml:"-"`                 // enabled 键是否被显式指定（区分缺省与写 false），YAML 解码自动设置；程序化构造时显式 false 需同时置此字段为 true
 }
 
-// UnmarshalYAML 在解码前记录 enabled 键是否显式出现，供 setDefaults 区分“未写”与“写 false”
+// UnmarshalYAML 在解码前记录 enabled 键是否显式出现，供 ApplyDefaults 区分“未写”与“写 false”
 func (a *AsyncConfig) UnmarshalYAML(value *yaml.Node) error {
 	if value.Kind == yaml.MappingNode {
 		for i := 0; i+1 < len(value.Content); i += 2 {
 			if value.Content[i].Value == "enabled" {
-				a.enabledSet = true
+				a.EnabledSet = true
 				break
 			}
 		}
@@ -72,10 +72,10 @@ type RotateConfig struct {
 	Interval   int `yaml:"interval"`    // 时间轮转间隔（秒），0=禁用时间轮转仅按大小切割，如 86400 表示每天切割
 }
 
-// NetworkConfig 网络日志输出配置，将日志通过 TCP/UDP 发送到远程日志收集服务
+// NetworkConfig 网络日志输出配置，将日志通过 TCP/UDP/HTTP 发送到远程日志收集服务
 type NetworkConfig struct {
 	Enabled bool   `yaml:"enabled"` // 是否启用网络输出
-	Type    string `yaml:"type"`    // 网络协议类型：tcp / udp
+	Type    string `yaml:"type"`    // 网络协议类型：tcp / udp / http
 	Address string `yaml:"address"` // 远程服务地址，格式为 host:port，如 127.0.0.1:9000
 	Timeout int    `yaml:"timeout"` // 连接/读写超时时间（秒），默认 5
 	Retry   int    `yaml:"retry"`   // 发送失败后的重试次数，默认 3
@@ -92,15 +92,34 @@ type StackConfig struct {
 // SamplingConfig 日志采样配置，在高并发场景下按 (级别, 消息) 维度限速重复日志，降低 IO 和 CPU 开销
 type SamplingConfig struct {
 	Enabled    bool `yaml:"enabled"`    // 是否启用采样
-	Initial    int  `yaml:"initial"`    // 每个采样窗口内每种 (级别, 消息) 前 N 条全量保留（不采样），默认 1000
-	Thereafter int  `yaml:"thereafter"` // 窗口内超过 initial 后每 N 条保留 1 条，默认 100；0 = 超出后全丢
-	Tick       int  `yaml:"tick"`       // 采样窗口时长（秒），窗口重置后重新放行 initial 条，默认 1
+	Initial    int  `yaml:"initial"`    // 每窗口每级每条 (级别, 消息) 前 N 条全放（未配置默认 1000；显式 0 = 不预放行）
+	Thereafter int  `yaml:"thereafter"` // 超过 initial 后每 N 条放 1 条（未配置默认 100；显式 0 = 超出后全丢）
+	Tick       int  `yaml:"tick"`       // 采样窗口时间（秒）（默认 1）
+	// 键是否显式出现（区分缺省与写 0），由 UnmarshalYAML 设置；程序化构造时显式 0 需同时置对应字段为 true
+	InitialSet    bool `yaml:"-"`
+	ThereafterSet bool `yaml:"-"`
 }
 
-// FieldCacheConfig 字段缓存配置（已废弃，保留用于向后兼容旧配置文件）
+// UnmarshalYAML 在解码前记录 initial/thereafter 键是否显式出现，供 ApplyDefaults 区分“未写”与“写 0”
+func (s *SamplingConfig) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(value.Content); i += 2 {
+			switch value.Content[i].Value {
+			case "initial":
+				s.InitialSet = true
+			case "thereafter":
+				s.ThereafterSet = true
+			}
+		}
+	}
+	type plain SamplingConfig // 新类型避免递归调用本方法
+	return value.Decode((*plain)(s))
+}
+
+// FieldCacheConfig 字段缓存配置（已废弃，保留用于向后兼容旧配置文件，不再设置默认值）
 type FieldCacheConfig struct {
-	Enabled bool `yaml:"enabled"` // 是否启用字段缓存
-	Size    int  `yaml:"size"`    // 缓存容量（条数），默认 1000
+	Enabled bool `yaml:"enabled"` // 是否启用字段缓存（已废弃，无效果）
+	Size    int  `yaml:"size"`    // 缓存容量（条数，已废弃，无效果）
 }
 
 // PerformanceConfig 性能优化配置，针对高吞吐场景的底层调优开关
@@ -127,16 +146,17 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	// 设置默认值
-	setDefaults(&config)
+	config.ApplyDefaults()
 
 	return &config, nil
 }
 
-// setDefaults 设置默认值
-func setDefaults(cfg *Config) {
+// ApplyDefaults 设置默认值。LoadConfig 与 NewFromConfig 会自动调用；
+// 程序化构造 Config 后也可手动调用以获得完整默认值。
+func (cfg *Config) ApplyDefaults() {
 	// async.enabled：enabled 键缺省时默认启用异步；显式 enabled: false 保持同步模式。
 	// 旧逻辑按“其他字段全为零值”推断缺省，导致显式写 enabled: false 被翻转为 true（如 tlog.dev.yaml）
-	if !cfg.Log.Async.enabledSet {
+	if !cfg.Log.Async.EnabledSet {
 		cfg.Log.Async.Enabled = true
 	}
 	if cfg.Log.Async.BufferSize == 0 {
@@ -171,10 +191,11 @@ func setDefaults(cfg *Config) {
 		cfg.Log.Stacktrace.Depth = 10
 	}
 	if cfg.Log.Sampling.Enabled {
-		if cfg.Log.Sampling.Initial == 0 {
+		// 缺省键才填默认值；显式写 0 保持 0（thereafter: 0 = 超出后全丢，initial: 0 = 不预放行）
+		if cfg.Log.Sampling.Initial == 0 && !cfg.Log.Sampling.InitialSet {
 			cfg.Log.Sampling.Initial = 1000
 		}
-		if cfg.Log.Sampling.Thereafter == 0 {
+		if cfg.Log.Sampling.Thereafter == 0 && !cfg.Log.Sampling.ThereafterSet {
 			cfg.Log.Sampling.Thereafter = 100
 		}
 		if cfg.Log.Sampling.Tick <= 0 {

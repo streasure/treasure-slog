@@ -4,9 +4,9 @@ log:
 
   async:                         # 异步写入配置（核心性能参数）
     enabled: true                # 启用异步模式：日志先入环形缓冲区，由后台 worker 批量写入，不阻塞业务协程
-    worker_multiplier: 1         # worker 数 = CPU核数 × 此倍数。1 = 核数个 worker，2 = 2倍核数（上限32）
-    buffer_size: 100000          # 环形缓冲区容量（每 worker 一份），生产环境调大避免丢日志
-    batch_size: 1000             # 每次批量写入的最大条数，攒够或超时才刷盘，减少 I/O 次数
+    worker_multiplier: 1         # worker 数 = CPU核数 × 此倍数。1 = 核数个 worker，2 = 2倍核数（上限32；lock_free: true 时下限 4）
+    buffer_size: 100000          # 环形缓冲区总容量（条，按 worker 分片均分）；缓冲满时降级为同步写入不丢日志，调大可让高峰期更久保持异步
+    batch_size: 1000             # 每次批量写入的最大条数 + 刷盘字节阈值（KB，1000 ≈ 1MB），攒够或超时才刷盘，减少 I/O 次数
     flush_interval: 100          # 批量刷盘超时（毫秒），即使没攒够 batch_size 也在此时间后强制写入
 
   console:                       # 控制台输出
@@ -30,7 +30,7 @@ log:
     enabled: true                # 启用采样
     tick: 1                      # 采样窗口（秒）：每窗口重置，重新放行 initial 条
     initial: 10000               # 每窗口每种 (级别,消息) 前 10000 条全量记录（保证冷启动与突发不丢）
-    thereafter: 1000             # 超过后该消息每 1000 条记录 1 条；不同消息计数独立，互不影响
+    thereafter: 1000             # 超过后该消息每 1000 条记录 1 条；不同消息计数独立（近似：4096 桶哈希冲突会合并）
 
   performance:                   # 底层性能优化开关
     lock_free: true              # 启用后确保最少 4 个 worker，分散环形缓冲区锁竞争（非真正无锁）

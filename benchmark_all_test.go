@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/streasure/treasure-slog/internal/config"
+	"github.com/streasure/treasure-slog/config"
 )
 
 // makeAsyncLogger 构造一个异步模式 logger 写入 io.Discard（纯管线性能测试，无 I/O 开销）

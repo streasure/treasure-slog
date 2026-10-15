@@ -1,47 +1,55 @@
 @echo off
+rem Encoding: GBK (CP936). Keep this file in GBK; saving as UTF-8 breaks parsing on Chinese Windows.
+cd /d "%~dp0"
 
-rem Treasure-Slog å¯åŠ¨ç¤ºä¾‹è„šæœ¬
-rem ç”¨äºå¿«é€Ÿæµ‹è¯•ä¸åŒç¯å¢ƒçš„é…ç½®
+rem Treasure-Slog Æô¶¯Ê¾Àı½Å±¾
+rem ÓÃÓÚ¿ìËÙ²âÊÔ²»Í¬»·¾³µÄÅäÖÃ
 
 echo ==============================
-echo Treasure-Slog å¯åŠ¨ç¤ºä¾‹è„šæœ¬
+echo Treasure-Slog Æô¶¯Ê¾Àı½Å±¾
 echo ==============================
-echo 1. è¿è¡ŒåŸºç¡€ç¤ºä¾‹ï¼ˆå¼€å‘ç¯å¢ƒï¼‰
-echo 2. è¿è¡Œ HTTP æœåŠ¡å™¨ç¤ºä¾‹ï¼ˆç”Ÿäº§ç¯å¢ƒï¼‰
-echo 3. è¿è¡Œé«˜ååé‡æµ‹è¯•ï¼ˆé«˜æ€§èƒ½æ¨¡å¼ï¼‰
-echo 4. é€€å‡º
+echo 1. ÔËĞĞ»ù´¡Ê¾Àı£¨¿ª·¢»·¾³£©
+echo 2. ÔËĞĞ HTTP ·şÎñÆ÷Ê¾Àı£¨Éú²ú»·¾³£©
+echo 3. ÔËĞĞ¸ßÍÌÍÂÁ¿²âÊÔ£¨¸ßĞÔÄÜÄ£Ê½£©
+echo 4. ÔËĞĞÈ«¾Ö logger Ê¾Àı£¨Ä¬ÈÏÅäÖÃ£©
+echo 5. ÍË³ö
 
 echo.
-set /p choice=è¯·é€‰æ‹©è¦è¿è¡Œçš„ç¤ºä¾‹ (1-4): 
+set /p choice=ÇëÑ¡ÔñÒªÔËĞĞµÄÊ¾Àı (1-5):
 
 if "%choice%"=="1" goto basic
 if "%choice%"=="2" goto http
 if "%choice%"=="3" goto highperf
-if "%choice%"=="4" goto exit
+if "%choice%"=="4" goto global
+if "%choice%"=="5" goto exit
 
-echo æ— æ•ˆé€‰æ‹©ï¼Œè¯·é‡æ–°è¿è¡Œè„šæœ¬å¹¶é€‰æ‹© 1-4
+echo ÎŞĞ§Ñ¡Ôñ£¬ÇëÖØĞÂÔËĞĞ½Å±¾²¢Ñ¡Ôñ 1-5
 pause
 goto end
 
 :basic
-echo è¿è¡ŒåŸºç¡€ç¤ºä¾‹ï¼ˆå¼€å‘ç¯å¢ƒï¼‰...
-go run examples/basic/main.go configs/config.dev.yaml
+echo ÔËĞĞ»ù´¡Ê¾Àı£¨¿ª·¢»·¾³£©...
+go run examples/basic/main.go "configs/tlog.dev.yaml"
 goto end
 
 :http
-echo è¿è¡Œ HTTP æœåŠ¡å™¨ç¤ºä¾‹ï¼ˆç”Ÿäº§ç¯å¢ƒï¼‰...
-go run examples/http_server/main.go configs/config.prod.yaml
+echo ÔËĞĞ HTTP ·şÎñÆ÷Ê¾Àı£¨Éú²ú»·¾³£©...
+go run examples/http_server/main.go "configs/tlog.prod.yaml"
 goto end
 
 :highperf
-echo è¿è¡Œé«˜ååé‡æµ‹è¯•ï¼ˆé«˜æ€§èƒ½æ¨¡å¼ï¼‰...
-go run examples/high_throughput/main.go configs/config.highperf.yaml
+echo ÔËĞĞ¸ßÍÌÍÂÁ¿²âÊÔ£¨¸ßĞÔÄÜÄ£Ê½£©...
+go run examples/high_throughput/main.go "configs/tlog.highperf.yaml"
+goto end
+
+:global
+echo ÔËĞĞÈ«¾Ö logger Ê¾Àı£¨Ä¬ÈÏÅäÖÃ£©...
+go run examples/global/main.go "configs/tlog.yaml"
 goto end
 
 :exit
-echo é€€å‡ºè„šæœ¬
+echo ÍË³ö½Å±¾
 goto end
 
 :end
-echo ç¤ºä¾‹è¿è¡Œå®Œæˆï¼
-pause
+echo Ê¾ÀıÔËĞĞÍê³É£¡pause

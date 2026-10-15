@@ -186,9 +186,9 @@ func TestHookFunction(t *testing.T) {
 
 	hookCalled := false
 	testHook := &TestHookImpl{
-		OnRun: func(msg string, level string, args ...any) {
+		OnBefore: func(e *Event) {
 			hookCalled = true
-			t.Logf("Hook called with msg: %s, level: %s, args: %v", msg, level, args)
+			t.Logf("Hook called with msg: %s, level: %s, attrs: %v", e.Message, e.Level, e.Attrs)
 		},
 	}
 
@@ -269,11 +269,18 @@ func TestSync(t *testing.T) {
 
 // TestHookImpl 测试用的 Hook 实现
 type TestHookImpl struct {
-	OnRun func(msg string, level string, args ...any)
+	OnBefore func(e *Event)
+	OnAfter  func(e *Event, err error)
 }
 
-func (h *TestHookImpl) Run(msg string, level string, args ...any) {
-	if h.OnRun != nil {
-		h.OnRun(msg, level, args...)
+func (h *TestHookImpl) BeforeWrite(e *Event) {
+	if h.OnBefore != nil {
+		h.OnBefore(e)
+	}
+}
+
+func (h *TestHookImpl) AfterWrite(e *Event, err error) {
+	if h.OnAfter != nil {
+		h.OnAfter(e, err)
 	}
 }

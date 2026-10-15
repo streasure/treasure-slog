@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/streasure/treasure-slog/internal/config"
+	"github.com/streasure/treasure-slog/config"
 )
 
 // lockContentionTest 辅助：构造一个写入 io.Discard 的异步 logger，使用自定义 shard 数

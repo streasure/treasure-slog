@@ -170,10 +170,8 @@ func TestAddHook_NilIgnored(t *testing.T) {
 	}
 }
 
-// noopHook 实现 Hook 接口但不做任何事
-type noopHook struct{}
-
-func (h *noopHook) Run(msg string, level string, args ...any) {}
+// noopHook 实现 Hook 接口但不做任何事（嵌入 HookFuncs 适配器，零值安全）
+type noopHook struct{ HookFuncs }
 
 // TestWorkerRun_DeferOrder 验证 worker recover 在 wg.Done 之前
 func TestWorkerRun_DeferOrder(t *testing.T) {
