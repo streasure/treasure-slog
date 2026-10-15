@@ -2,8 +2,8 @@
 
 基于 Go 原生 `log/slog` 构建的高性能结构化日志库。
 
-- 零反射 JSON 序列化（FastHandler），纯序列化路径 **0 次内存分配**，吞吐约 **2200 万条/秒**
-- 同步模式约 **710 万条/秒**，异步模式约 **440 万条/秒**，核心路径 0~2 次分配
+- 零反射 JSON 序列化（FastHandler），纯序列化路径 **0 次内存分配**，吞吐约 **2100-2200 万条/秒**
+- 同步模式约 **890 万条/秒**，异步模式约 **550 万条/秒**，核心路径 0~2 次分配
 - 分片环形缓冲区 + 多 worker 批量写入，高并发（8~256 goroutine）下吞吐稳定
 - 支持文件轮转、网络输出（TCP/UDP/HTTP）、日志采样、Hook、动态级别、Context 追踪注入
 
@@ -42,8 +42,8 @@ go get github.com/streasure/treasure-slog
 
 treasure-slog **没有任何隐式初始化**：import 无副作用，不解析命令行参数，不读取默认配置。
 
-- 必须显式调用 `New(configPath)` 创建 logger
-- **首次** `New` 调用会同时设置全局实例（`sync.Once` 保证），此后包级全局函数即可用
+- 必须显式创建 logger：`New(configPath, opts...)` 从配置文件构建，`NewFromConfig(cfg, opts...)` 从内存 `config.Config` 构建（均可叠加函数选项，见[扩展与二次开发](#10-扩展与二次开发)）
+- **首次**成功构建会同时设置全局实例（`sync.Once` 保证），此后包级全局函数即可用
 - `New` 返回具体类型 `*SLogger`（完整实现 `Logger` 接口）
 
 ### API 设计
@@ -699,39 +699,40 @@ logger.New("configs/tlog.prod.yaml")
 
 > 环境：Intel i5-10400F @ 2.90GHz（12 逻辑核），Windows，Go 1.26.5，`benchtime=1s`，`-count=3` 取中位数
 > 下列 QPS 为 `RunParallel` 12 goroutine 聚合吞吐（io.Discard，纯管线；FullLink 与高并发表除外——后者为显式 8~256 goroutine）
+> 完整压测数据与各维度明细见 [docs/benchmark.md](docs/benchmark.md)
 
 ### 核心指标
 
 | 场景 | 每条耗时 | 吞吐 | 内存/条 | 分配次数 |
 |------|---------|------|--------|---------|
-| 纯序列化（直接调 FastHandler） | ~44-46 ns | ~2160-2240 万/s | 0 B | **0** |
-| 同步模式（全级别混合） | ~140 ns | ~710 万/s | 28 B | 1 |
-| 极限吞吐（Info 单参数） | ~138 ns | ~720 万/s | 2 B | 0 |
-| 异步模式（全级别混合） | ~229 ns | ~440 万/s | 67 B | 2 |
-| 10M 吞吐（Info + 格式参数，8 worker） | ~172 ns | ~580 万/s | 23 B | 1 |
-| 全链路（真实文件轮转 I/O） | ~356 ns | ~280 万/s | 121 B | 2 |
+| 纯序列化（直接调 FastHandler） | ~45-48 ns | ~2070-2220 万/s | 0 B | **0** |
+| 同步模式（全级别混合） | ~112 ns | ~890 万/s | 28 B | 1 |
+| 极限吞吐（Info 单参数） | ~111 ns | ~900 万/s | 1 B | 0 |
+| 异步模式（全级别混合） | ~183 ns | ~550 万/s | 68 B | 2 |
+| 10M 吞吐（Info + 格式参数） | ~159 ns | ~630 万/s | 24 B | 1 |
+| 全链路（真实文件轮转 I/O） | ~340 ns | ~295 万/s | 132 B | 2 |
 
 ### 高并发稳定性（异步管线）
 
 | 并发 goroutine | 8 | 16 | 32 | 64 | 128 | 256 |
 |----------------|-----|-----|-----|-----|------|-----|
-| 吞吐（万/s） | ~621 | ~610 | ~592 | ~514 | ~525 | ~476 |
+| 吞吐（万/s） | ~460 | ~525 | ~527 | ~453 | ~485 | ~419 |
 
-8~256 并发吞吐维持在 ~476-621 万/s，无锁竞争导致的明显衰减。
+8~256 并发吞吐维持在 ~419-527 万/s，无锁竞争导致的明显衰减。
 
 ### Worker 扩展性（异步管线）
 
 | Worker 数 | 1 | 2 | 4 | 8 | 16 | 32 |
 |-----------|-----|-----|-----|-----|-----|-----|
-| 吞吐（万/s） | ~408 | ~442 | ~478 | ~513 | ~490 | ~485 |
+| 吞吐（万/s） | ~355 | ~447 | ~497 | ~544 | ~578 | ~537 |
 
-8 worker 附近吞吐最高（~513 万/s），16~32 worker 因唤醒与切换开销略降；1~4 worker 已达约八至九成水平。
+8~16 worker 吞吐最高（~544-578 万/s），32 worker 因唤醒与切换开销略降；单 worker 仅约 65% 水平。
 
 ### 复现命令
 
 ```bash
-go test -run=^$ -bench "BenchmarkPureSerialization|BenchmarkAllLevelsAsync$|BenchmarkAllLevelsSync$|BenchmarkThroughputMax|BenchmarkAllInterfaces10M|BenchmarkFullLink" -benchmem -count=3
-go test -run=^$ -bench "BenchmarkExtremeConcurrency|BenchmarkWorkerScalability" -benchtime=1s -count=3
+go test -run '^$' -bench "BenchmarkPureSerialization|BenchmarkAllLevelsAsync$|BenchmarkAllLevelsSync$|BenchmarkThroughputMax|BenchmarkAllInterfaces10M|BenchmarkFullLink" -benchmem -count 3
+go test -run '^$' -bench "BenchmarkExtremeConcurrency|BenchmarkWorkerScalability" -benchtime 1s -count 5
 ```
 
 ## 性能调优建议
@@ -740,7 +741,7 @@ go test -run=^$ -bench "BenchmarkExtremeConcurrency|BenchmarkWorkerScalability" 
 2. **生产环境禁用控制台**：`console.enabled: false`，多路输出有聚合开销
 3. **高频日志启用采样**：`sampling.enabled: true`，优先在入口丢弃
 4. **异步参数按内存预算配置**：实际容量因 2 的幂取整与每 shard 最小 256 上取整，约为 `buffer_size` 的 2~3 倍（`prealloc: true` 再 ×2），乘单条日志大小即峰值内存；大日志场景调小 `buffer_size` 与 `batch_size`
-5. **worker 不必过多**：4~8 worker 吞吐最高，16 以上因唤醒与切换开销反而下降（见扩展性数据）
+5. **worker 不必过多**：8~16 worker 吞吐最高，默认（CPU 核数）即可；单 worker 会损失约三分之一吞吐（见扩展性数据）
 6. **定位瓶颈**：`EnableTiming(true)` + `DumpTiming()` 查看各阶段耗时分布
 
 ## 测试
