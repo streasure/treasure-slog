@@ -233,6 +233,26 @@ func callHookAfter(h Hook, e *Event, err error) {
 	h.AfterWrite(e, err)
 }
 
+// reportWriteError 将写错误交给 onError（nil 时打印 stderr），onError panic 被隔离，
+// 保持“错误打到 stderr、不向上冒泡”的行为
+func reportWriteError(err error, onError func(error)) {
+	if err == nil {
+		return
+	}
+	if onError != nil {
+		func() {
+			defer func() {
+				if rec := recover(); rec != nil {
+					fmt.Fprintf(os.Stderr, "[treasure-slog] error handler panic recovered: %v\n", rec)
+				}
+			}()
+			onError(err)
+		}()
+		return
+	}
+	fmt.Fprintf(os.Stderr, "[treasure-slog] handler error: %v\n", err)
+}
+
 // writeErrorHandler 将下游写错误交给 onError（nil 时打印 stderr），保持“错误打到 stderr、不向上冒泡”的行为
 type writeErrorHandler struct {
 	handler slog.Handler
@@ -248,20 +268,7 @@ func (h *writeErrorHandler) Enabled(ctx context.Context, level slog.Level) bool 
 }
 
 func (h *writeErrorHandler) Handle(ctx context.Context, r slog.Record) error {
-	if err := h.handler.Handle(ctx, r); err != nil {
-		if h.onError != nil {
-			func() {
-				defer func() {
-					if rec := recover(); rec != nil {
-						fmt.Fprintf(os.Stderr, "[treasure-slog] error handler panic recovered: %v\n", rec)
-					}
-				}()
-				h.onError(err)
-			}()
-		} else {
-			fmt.Fprintf(os.Stderr, "[treasure-slog] handler error: %v\n", err)
-		}
-	}
+	reportWriteError(h.handler.Handle(ctx, r), h.onError)
 	return nil
 }
 

@@ -335,11 +335,12 @@ type batchWriter struct {
 	batchSize int
 	interval  time.Duration
 	timer     *time.Timer
+	onError   func(error) // 定时 flush 等延迟写失败上报（nil 时静默丢弃）
 	mu        sync.Mutex
 	closed    bool
 }
 
-func newBatchWriter(writer io.Writer, batchSize int, interval time.Duration) *batchWriter {
+func newBatchWriter(writer io.Writer, batchSize int, interval time.Duration, onError func(error)) *batchWriter {
 	if batchSize <= 0 {
 		batchSize = 1024
 	}
@@ -352,6 +353,7 @@ func newBatchWriter(writer io.Writer, batchSize int, interval time.Duration) *ba
 		buffer:    bufio.NewWriterSize(writer, bufSize),
 		batchSize: batchSize,
 		interval:  interval,
+		onError:   onError,
 	}
 	// 持锁启动定时器：flush/Close 都在锁内访问 bw.timer，
 	// 构造侧的赋值也须在锁内，否则与首个 flush 回调构成数据竞争
@@ -386,7 +388,10 @@ func (bw *batchWriter) flush() {
 		return
 	}
 	if bw.buffer.Buffered() > 0 {
-		bw.buffer.Flush() // 忽略错误：timer flush 失败不影响主流程，下次 Write 会再试
+		// 定时 flush 失败不中断主流程（下次 Write 会再试），但须上报给错误处理
+		if err := bw.buffer.Flush(); err != nil && bw.onError != nil {
+			bw.onError(err)
+		}
 	}
 	if bw.timer != nil {
 		bw.timer.Reset(bw.interval)
@@ -752,7 +757,7 @@ var (
 // resolveLogPath 解析 log.file.path 为绝对路径
 // 规则：
 //
-//  1. 绝对路径：原样使用
+//  1. 绝对路径：filepath.Clean 规范化后使用
 //  2. 相对路径：基于进程工作目录（即调用工程所在目录）解析
 //  3. 以下情况直接报错，而不是把日志写进错误位置：
 //     - 路径为空
@@ -912,7 +917,8 @@ func NewFromConfig(cfg *config.Config, opts ...Option) (*SLogger, error) {
 	// batchWriter 仅在异步模式下使用
 	if asyncEnabled {
 		slogger.batchWriter = newBatchWriter(writer, cfg.Log.Async.BatchSize,
-			time.Duration(cfg.Log.Async.FlushInterval)*time.Millisecond)
+			time.Duration(cfg.Log.Async.FlushInterval)*time.Millisecond,
+			func(err error) { reportWriteError(err, o.errHandler) })
 		writer = slogger.batchWriter
 	}
 
@@ -925,7 +931,8 @@ func NewFromConfig(cfg *config.Config, opts ...Option) (*SLogger, error) {
 	// 控制台独立格式：当 console.format 与 log.format 不同时，创建独立控制台 handler
 	if consoleIndependent {
 		cw := newBatchWriter(os.Stdout, cfg.Log.Async.BatchSize,
-			time.Duration(cfg.Log.Async.FlushInterval)*time.Millisecond)
+			time.Duration(cfg.Log.Async.FlushInterval)*time.Millisecond,
+			func(err error) { reportWriteError(err, o.errHandler) })
 		consoleHandler := slogger.createConsoleHandler(cw, consoleFormat)
 		outputHandler = slog.NewMultiHandler(outputHandler, consoleHandler)
 		slogger.consoleWriter = cw
@@ -1143,6 +1150,7 @@ func (l *SLogger) log(ctx context.Context, level slog.Level, msg string, args ..
 	}
 
 	// 级别过滤（热路径：先过滤再进 defer，避免无用 defer 开销）
+	endLevel := timing.startTimer(&timing.levelCheckNS)
 	var currentLevel slog.Level
 	if l.level != nil {
 		currentLevel = slog.Level(l.level.Load())
@@ -1155,8 +1163,10 @@ func (l *SLogger) log(ctx context.Context, level slog.Level, msg string, args ..
 			timing.logFiltered.Add(1)
 			timing.logCalls.Add(1)
 		}
+		endLevel()
 		return
 	}
+	endLevel()
 
 	// 合并 defer：timing + recover，减少 defer 开销
 	endTotal := timing.startTimer(&timing.logTotalNS)
@@ -1181,6 +1191,7 @@ func (l *SLogger) log(ctx context.Context, level slog.Level, msg string, args ..
 
 	// 异步模式：获取日志条目，推入环形缓冲区
 	var entry *logEntry
+	endPool := timing.startTimer(&timing.poolGetNS)
 	if l.usePool {
 		if v := logEntryPool.Get(); v != nil {
 			if e, ok := v.(*logEntry); ok {
@@ -1191,6 +1202,7 @@ func (l *SLogger) log(ctx context.Context, level slog.Level, msg string, args ..
 	if entry == nil {
 		entry = &logEntry{}
 	}
+	endPool()
 
 	entry.msg = msg
 	entry.level = level
@@ -1206,7 +1218,9 @@ func (l *SLogger) log(ctx context.Context, level slog.Level, msg string, args ..
 	}
 	entry.ts = time.Now() // 生产者设置时间戳，worker 直接使用避免重复调用
 
+	endPush := timing.startTimer(&timing.ringBufPushNS)
 	pushed := l.ringBuf.Push(entry)
+	endPush()
 	if timing.enabled.Load() {
 		timing.logAsyncPush.Add(1)
 	}
@@ -1226,6 +1240,8 @@ func (l *SLogger) log(ctx context.Context, level slog.Level, msg string, args ..
 
 // processEntryDirect 同步模式直接处理日志（绕过 slog.Logger，直接调用 handler.Handle）
 func (l *SLogger) processEntryDirect(ctx context.Context, level slog.Level, msg string, args []any) {
+	endSync := timing.startTimer(&timing.syncProcessNS)
+	defer endSync()
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Fprintf(os.Stderr, "[treasure-slog] processEntryDirect panic recovered: %v\n", r)

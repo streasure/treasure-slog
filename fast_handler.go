@@ -61,6 +61,11 @@ func (h *FastHandler) Handle(_ context.Context, r slog.Record) error {
 	if h.w == nil {
 		return nil
 	}
+	// 计时仅在启用时介入：禁用态只付一次原子读，避免纯序列化路径回退
+	if timing.enabled.Load() {
+		start := time.Now()
+		defer func() { timing.handlerHandleNS.Add(int64(time.Since(start))) }()
+	}
 
 	bp := fastBufPool.Get().(*[]byte)
 	buf := (*bp)[:0]

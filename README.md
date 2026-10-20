@@ -22,7 +22,7 @@
 | 动态级别 | `SetLevel` 运行时调整，`With` 派生的 logger 全链路共享级别状态 |
 | Context 注入 | `WithContext` 自动提取 `request_id` / `user_id` / `span_id` / `trace_id` |
 | Hook 机制 | 插件参与日志写入生命周期（写前/写后），仅对通过采样的日志触发，支持链式追加 |
-| 堆栈追踪 | Error 级别自动附加堆栈（可配置级别与深度） |
+| 堆栈追踪 | 可在指定级别（默认 error）附加堆栈与深度，需 `stacktrace.enabled: true`（默认关闭） |
 | 诊断统计 | 内置耗时统计 API，可量化各阶段（级别检查/入队/序列化/写入）开销 |
 
 ## 环境要求
@@ -330,7 +330,7 @@ func main() {
 }
 ```
 
-### 8. EnableTiming / DumpTiming 方法 - 性能诊断
+### 8. EnableTiming / DumpTiming - 性能诊断（包级函数）
 
 内置耗时统计，用于定位性能瓶颈。
 
@@ -405,7 +405,7 @@ type HookFuncs struct {
 > - `Event.Attrs` 是完整字段视图：`With`/`WithContext` 预注入属性 + context 提取字段（同 key 已去重）。
 >   `Info(ctx, "格式 %s", 参数)` 的格式化参数已内嵌进 msg，不作为结构化属性传入。
 > - 每个 Hook 调用独立 panic 隔离；同步模式在调用方 goroutine 执行，异步模式在 worker 执行。
-> - `AfterWrite` 可感知写失败（如磁盘满、网络断开），适合做降级告警。
+> - `AfterWrite` 的 `err` 为下游 `Handle` 返回值：同步模式即真实写错误；异步模式为入队/缓冲阈值 flush 错误。延迟落盘失败（磁盘满、网络断开）由 `WithErrorHandler` 统一兜底上报（写错误不向上冒泡），适合做降级告警。
 
 ```go
 // AlertHook 示例：Error 级别时发送告警（嵌入 HookFuncs 只实现 BeforeWrite）
@@ -518,29 +518,29 @@ go run ./examples/global              # 全局函数用法
 
 ```yaml
 log:
-  # 日志级别: debug | info | warn | error（默认 info）
+  # 日志级别: debug | info | warn | error（缺省或非法值回退 info，stderr 警告）
   level: info
   # 日志格式: json（FastHandler 零反射）| console / text（标准 TextHandler）
-  # 非法值: stderr 打印警告并回退 json
+  # 非法值: stderr 打印警告并回退 json；未知配置键被静默忽略
   format: json
 
   # 异步配置（async 块缺省或未写 enabled 键时默认启用；显式 enabled: false 才是同步模式）
   async:
     enabled: true            # 默认 true；false 时为同步模式
     buffer_size: 10000       # 环形缓冲区总容量（条，向上取整到 2 的幂，按 worker 分片均分）
-    batch_size: 100          # 双重语义：worker 单批按条弹出（不满也处理，超时兜底）+ 刷盘字节阈值（batch_size×1KB）
+    batch_size: 100          # 双重语义：worker 单批按条弹出（不满也处理，超时兜底）+ 刷盘字节阈值（batch_size×1KB，下限 64KB）
     flush_interval: 100      # 刷新间隔（毫秒）
     worker_multiplier: 1     # worker 数 = CPU 核数 × 倍数（默认 1，最大 32）
 
   # 控制台输出
   console:
     enabled: false           # 默认 false
-    format: text             # 缺省时与 log.format 一致；不同时启用独立 handler（如文件 JSON + 控制台 TEXT）
+    format: ""               # 缺省（空）时跟随 log.format（默认即 json）；不同时启用独立 handler（如文件 JSON + 控制台 TEXT）
 
   # 文件输出（目录不存在时自动创建）
   file:
     enabled: false           # 默认 false
-    path: ./logs/app.log     # 绝对路径原样使用；相对路径基于进程工作目录解析，目录自动创建
+    path: ""                 # 必填、无默认值（启用后不写会报错）；示例 ./logs/app.log；绝对路径经 Clean 规范化使用，相对路径基于进程工作目录解析，目录自动创建
     rotate:
       max_size: 100          # 单文件上限（MB），默认 100
       max_backups: 10         # 保留备份数，默认 10
@@ -550,8 +550,8 @@ log:
   # 网络输出（ELK / Graylog 等）
   network:
     enabled: false            # 默认 false
-    type: tcp                 # tcp | udp | http
-    address: localhost:9200
+    type: ""                  # 必填、无默认值：tcp | udp | http（启用后不写会报错）
+    address: ""               # 必填、无默认值；示例 localhost:9200
     timeout: 5                # 秒，默认 5
     retry: 3                  # 重试次数，默认 3
     tls: false                # TCP TLS
@@ -573,7 +573,7 @@ log:
   # 性能开关（默认全为 false）
   performance:
     lock_free: false           # 启用时 worker 数下限提升到 4
-    use_pool: false            # logEntry / 序列化缓冲区对象池
+    use_pool: false            # logEntry 对象池（序列化缓冲池始终启用，不受此开关控制）
     prealloc: false            # 环形缓冲区容量加倍，预分配
 ```
 
@@ -629,7 +629,7 @@ log:
 |------|------|------|
 | `tlog.dev.yaml` | 开发 | 同步模式 + 控制台 text + debug 级别 |
 | `tlog.yaml` | 通用 | 异步 + 文件输出 + 采样 + error 堆栈 |
-| `tlog.prod.yaml` | 生产 | 异步 worker_multiplier=1 + 文件轮转 + 采样 |
+| `tlog.prod.yaml` | 生产 | 异步 worker_multiplier=1 + 文件轮转 + 采样 + error 堆栈 + performance 三开关全开 |
 | `tlog.highperf.yaml` | 极限吞吐 | 1M 缓冲 + worker_multiplier=2 + 全部性能开关 |
 
 **使用方式：**
@@ -652,7 +652,7 @@ logger.New("configs/tlog.prod.yaml")
         │
         ├── 同步模式 ──► processEntryDirect ─────────────────────────┐
         │                                                          │
-        └── 异步模式 ──► sync.Pool 取 logEntry ──► 分片环形缓冲区     │
+        └── 异步模式 ──► 获取 logEntry（use_pool 开启时取池）──► 分片环形缓冲区 │
                                     │                               │
                                     ▼                               ▼
                     worker（每 shard 一个消费者）批量弹出 ──► processEntry
@@ -670,10 +670,10 @@ logger.New("configs/tlog.prod.yaml")
         Hook 写前/写后（仅通过采样的日志触发）
               │
               ▼
-        输出级装饰(coreDecos) ──► 扇出（文件/控制台/网络/自定义 Writer）
+        输出级装饰(coreDecos) ──► FastHandler 一次序列化
               │
               ▼
-        FastHandler 序列化 ──► batchWriter 聚合写入（异步模式）
+        batchWriter 聚合写入（异步模式）──► 扇出 io.MultiWriter（文件/控制台/网络/自定义 Writer）
 ```
 
 核心组件：
@@ -692,13 +692,13 @@ logger.New("configs/tlog.prod.yaml")
 可靠性设计：
 
 - 缓冲区满降级同步写入，日志不丢失
-- 全链路 recover：log / worker / hook / 序列化各层 panic 均被捕获并记录到 stderr
+- 全链路 recover：log / worker / hook 层 panic 直接记录到 stderr；序列化层 panic 转为 error，由写错误处理（stderr / `WithErrorHandler`）上报
 - `Sync()` 幂等（`sync.Once`），并发调用安全；退出前调用可保证队列中日志全部落盘
 
 ## 性能实测
 
-> 环境：Intel i5-10400F @ 2.90GHz（12 逻辑核），Windows，Go 1.26.5，`benchtime=1s`，`-count=3` 取中位数
-> 下列 QPS 为 `RunParallel` 12 goroutine 聚合吞吐（io.Discard，纯管线；FullLink 与高并发表除外——后者为显式 8~256 goroutine）
+> 环境：Intel i5-10400F @ 2.90GHz（12 逻辑核），Windows，Go 1.26.5，`benchtime=1s`，核心指标 `-count=3` 取中位数（并发/扩展性维度 `-count=5` 合并中位数，见 docs/benchmark.md）
+> 核心指标与扩展性表为 `b.RunParallel`（GOMAXPROCS=12）聚合吞吐、io.Discard 纯管线；全链路两行为真实文件 I/O，高并发表为显式 8~256 goroutine
 > 完整压测数据与各维度明细见 [docs/benchmark.md](docs/benchmark.md)
 
 ### 核心指标
@@ -731,7 +731,7 @@ logger.New("configs/tlog.prod.yaml")
 ### 复现命令
 
 ```bash
-go test -run '^$' -bench "BenchmarkPureSerialization|BenchmarkAllLevelsAsync$|BenchmarkAllLevelsSync$|BenchmarkThroughputMax|BenchmarkAllInterfaces10M|BenchmarkFullLink" -benchmem -count 3
+go test -run '^$' -bench "BenchmarkPureSerialization|BenchmarkAllLevelsAsync$|BenchmarkAllLevelsSync$|BenchmarkThroughputMax|BenchmarkAllInterfaces10M|BenchmarkFullLink|BenchmarkAsyncFullLink" -benchmem -count 3
 go test -run '^$' -bench "BenchmarkExtremeConcurrency|BenchmarkWorkerScalability" -benchtime 1s -count 5
 ```
 
@@ -740,7 +740,7 @@ go test -run '^$' -bench "BenchmarkExtremeConcurrency|BenchmarkWorkerScalability
 1. **控制字段数量**：字段 ≤5 时序列化与参数传递开销最小
 2. **生产环境禁用控制台**：`console.enabled: false`，多路输出有聚合开销
 3. **高频日志启用采样**：`sampling.enabled: true`，优先在入口丢弃
-4. **异步参数按内存预算配置**：实际容量因 2 的幂取整与每 shard 最小 256 上取整，约为 `buffer_size` 的 2~3 倍（`prealloc: true` 再 ×2），乘单条日志大小即峰值内存；大日志场景调小 `buffer_size` 与 `batch_size`
+4. **异步参数按内存预算配置**：实际容量经 2 的幂取整、每 shard 最小 256、按分片上取整分摊后，常见配置约为 `buffer_size` 的 2~3 倍（如 10000/12 worker ≈ 2.46 倍，`prealloc: true` 再 ×2；极端分片比可能到 1.6~8 倍），乘单条日志大小即峰值内存；大日志场景调小 `buffer_size` 与 `batch_size`
 5. **worker 不必过多**：8~16 worker 吞吐最高，默认（CPU 核数）即可；单 worker 会损失约三分之一吞吐（见扩展性数据）
 6. **定位瓶颈**：`EnableTiming(true)` + `DumpTiming()` 查看各阶段耗时分布
 
@@ -750,7 +750,7 @@ go test -run '^$' -bench "BenchmarkExtremeConcurrency|BenchmarkWorkerScalability
 go test ./...                          # 全量测试（功能 / 并发 / panic 健壮性 / 锁竞争 / 时序）
 go test -race ./...                    # 竞态检测
 go test -run TestPanicRobustness -v    # 全链路 panic 压测
-go test -run "TestLockContention" -v   # 锁竞争与高并发稳定性
+go test -run "TestLockContention_" -v  # 锁竞争与高并发稳定性
 ```
 
 ## 故障排查

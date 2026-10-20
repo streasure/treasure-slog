@@ -3,7 +3,7 @@
 > 测试环境：Intel i5-10400F @ 2.90GHz（12 逻辑核），Windows，Go 1.26.5
 > 测试日期：2026-10-15
 > 测试方法：Go 标准 `testing.B`，`benchtime=1s`，`-count=3` 取中位数（并发/扩展性维度 `-count=5`，样本合并取中位数）
-> 测试模式：io.Discard 纯管线（无 I/O 开销），全链路与并发场景除外
+> 测试模式：io.Discard 纯管线（无 I/O 开销），仅全链路两例为真实文件写入
 >
 > 本机为桌面级环境，后台负载会造成 ±10~20% 波动，数据用于横向对比与量级参考。
 
@@ -33,13 +33,13 @@
 | 极限吞吐（Info 单参数） | 111.2 | ~899 | 1 | 0 |
 | 10M 吞吐（Info + 格式参数） | 158.5 | ~631 | 24 | 1 |
 | 10M 吞吐（含 Printf / WithContext 混合） | 185.7 | ~539 | 32 | 2 |
-| 异步全链路（真实文件轮转 I/O） | 238.7 | ~419 | 90 | 1 |
-| 同步全链路（真实文件轮转 I/O） | 340.3 | ~294 | 132 | 2 |
+| 异步全链路-简单消息（AsyncFullLink，真实文件 I/O） | 238.7 | ~419 | 90 | 1 |
+| 异步全链路-复杂消息（FullLink，真实文件 I/O） | 340.3 | ~294 | 132 | 2 |
 
 **结论：**
 - FastHandler 零反射序列化，纯序列化路径零内存分配，吞吐约 2065~2218 万条/秒
 - 同步模式聚合吞吐最高（~892 万/s，延迟 ~112 ns）；异步模式调用方不阻塞、批量写入削峰，聚合吞吐 ~548 万/s
-- 带真实文件轮转 I/O 的全链路仍有 ~294 万/s（同步）/ ~419 万/s（异步）
+- 带真实文件 I/O 的全链路（两个 benchmark 均为异步模式，仓库无同步全链路压测）：简单消息 ~419 万/s、4 键复杂消息 ~294 万/s
 - 核心路径 0~2 次分配，GC 压力可忽略
 
 ## 各级别同步压测
@@ -68,7 +68,7 @@
 
 ## 高并发稳定性
 
-不同并发 goroutine 数量下的聚合吞吐（异步管线，RunParallel）：
+不同并发 goroutine 数量下的聚合吞吐（异步管线，显式起停 8~256 个 goroutine）：
 
 | 并发 goroutine | 8 | 16 | 32 | 64 | 128 | 256 |
 |----------------|------|------|------|------|------|------|
@@ -83,7 +83,7 @@
 
 ## Worker 扩展性
 
-不同 Worker 数量下的聚合吞吐（异步管线，8 并发）：
+不同 Worker 数量下的聚合吞吐（异步管线，`b.RunParallel`，GOMAXPROCS=12）：
 
 | Worker 数 | 1 | 2 | 4 | 8 | 16 | 32 |
 |-----------|------|------|------|------|------|------|
@@ -98,7 +98,7 @@
 
 ## Shard 扩展性
 
-不同 Shard 数量下的聚合吞吐（异步管线，8 并发）：
+不同 Shard 数量下的聚合吞吐（异步管线，`b.RunParallel`，GOMAXPROCS=12）：
 
 | Shard 数 | 1 | 2 | 4 | 8 | 16 | 32 |
 |----------|------|------|------|------|------|------|
@@ -113,7 +113,7 @@
 
 ## 批量大小
 
-不同 `batch_size`（worker 单批条数 / 刷盘 KB 阈值双重语义）下的聚合吞吐（异步，8 并发）：
+不同 `batch_size`（worker 单批条数 / 刷盘 KB 阈值双重语义）下的聚合吞吐（异步，`b.RunParallel`，GOMAXPROCS=12）：
 
 | batch_size | 256 | 512 | 1024 | 2048 | 4096 |
 |------------|------|------|------|------|------|
@@ -165,7 +165,7 @@
 
 ```bash
 # 核心指标（纯序列化 / 同步 / 异步 / 极限吞吐 / 10M / 全链路）
-go test -run '^$' -bench "BenchmarkPureSerialization|BenchmarkAllLevelsAsync$|BenchmarkAllLevelsSync$|BenchmarkThroughputMax|BenchmarkAllInterfaces10M|BenchmarkFullLink" -benchmem -count 3
+go test -run '^$' -bench "BenchmarkPureSerialization|BenchmarkAllLevelsAsync$|BenchmarkAllLevelsSync$|BenchmarkThroughputMax|BenchmarkAllInterfaces10M|BenchmarkFullLink|BenchmarkAsyncFullLink" -benchmem -count 3
 
 # 分级别压测
 go test -run '^$' -bench "BenchmarkAsync(Debug|Info|Warn|Error)|BenchmarkSync(Debug|Info|Warn|Error)" -benchmem -count 3
@@ -188,7 +188,7 @@ go test -run '^$' -bench "BenchmarkWithContext" -benchmem -count 3
 1. **控制字段数量**：字段 ≤5 时序列化与参数传递开销最小
 2. **生产环境禁用控制台**：`console.enabled: false`，多路输出有聚合开销
 3. **高频日志启用采样**：`sampling.enabled: true`，优先在入口丢弃
-4. **异步参数按内存预算配置**：实际容量因 2 的幂取整与每 shard 最小 256 上取整，约为 `buffer_size` 的 2~3 倍（`prealloc: true` 再 ×2），乘单条日志大小即峰值内存
+4. **异步参数按内存预算配置**：实际容量经 2 的幂取整、每 shard 最小 256、按分片上取整分摊后，常见配置约为 `buffer_size` 的 2~3 倍（如 10000/12 worker ≈ 2.46 倍，`prealloc: true` 再 ×2；极端分片比可能到 1.6~8 倍），乘单条日志大小即峰值内存
 5. **Worker 不必过多**：8~16 Worker 吞吐最高，默认（CPU 核数）即可；单 Worker 会损失约三分之一吞吐
 6. **Shard 数 = Worker 数**：默认配置即最优区间，单 Shard 是明显瓶颈，过度分片无收益
 7. **避免频繁创建 WithContext**：在请求级别复用，不要每次日志都创建
