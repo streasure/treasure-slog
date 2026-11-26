@@ -83,8 +83,9 @@ func TestAppendJSONStringEscapes(t *testing.T) {
 
 // TestExtractContextInfoZeroAlloc 无追踪字段时零分配
 func TestExtractContextInfoZeroAlloc(t *testing.T) {
+	var nilCtx context.Context // 显式 nil：验证 extractContextInfo 的 nil 防御分支
 	allocs := testing.AllocsPerRun(100, func() {
-		if got := extractContextInfo(nil); got != nil {
+		if got := extractContextInfo(nilCtx); got != nil {
 			t.Fatal("nil ctx want nil")
 		}
 		if got := extractContextInfo(context.Background()); got != nil {

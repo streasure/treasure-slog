@@ -901,9 +901,7 @@ func NewFromConfig(cfg *config.Config, opts ...Option) (*SLogger, error) {
 		writers = append(writers, nw)
 	}
 	// Option 注入的自定义输出：与配置输出并行写入
-	for _, ow := range o.writers {
-		writers = append(writers, ow)
-	}
+	writers = append(writers, o.writers...)
 
 	var writer io.Writer
 	if len(writers) == 1 {
